@@ -9,6 +9,7 @@ const even = { relevansi: 20, emosi: 20, kebaruan: 20, timing: 10, shareability:
 
 describe("draft gate", () => {
   it("lets a worker publish only a draft a human already scheduled", () => {
+    expect(() => assertTransition("worker", "drafted", "needs_review")).not.toThrow();
     expect(() => assertTransition("worker", "needs_review", "posting")).toThrow(
       /publish requires human approval/,
     );

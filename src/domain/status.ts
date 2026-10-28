@@ -22,7 +22,12 @@ const EDGES: Record<DraftStatus, DraftStatus[]> = {
   rejected: ["needs_review"],
 };
 
-const WORKER_ALLOW = new Set(["scheduled>posting", "posting>posted", "posting>failed"]);
+const WORKER_ALLOW = new Set([
+  "drafted>needs_review",
+  "scheduled>posting",
+  "posting>posted",
+  "posting>failed",
+]);
 
 export function assertTransition(
   actor: ActorKind,

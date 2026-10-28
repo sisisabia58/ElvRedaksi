@@ -1,10 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { parseCopy } from "../agents/copywriter";
+import { parseCopy, type Slide } from "../agents/copywriter";
 import { analystSystem, copySystem } from "../agents/prompts";
 import { scoreTopic } from "../agents/analyst";
 import { makeShortCode } from "../domain/code";
 import { PASS_THRESHOLD_DEFAULT, SCOUT_INTERVAL_MS } from "../domain/constants";
+import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
+import { renderSlideHtml, slidesForFormat, type SlideTemplate } from "../render/html";
+import { PlaywrightRasterizer, type Rasterizer } from "../render/raster";
 import { createLlm, type LlmProvider } from "../llm/provider";
 import { fetchPublicText } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
@@ -488,7 +491,91 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   });
 }
 
-export async function runDesigner(_ctx: JobCtx): Promise<void> {}
+export type DesignerCtx = JobCtx & { rasterizer?: Rasterizer };
+
+export async function runDesigner(ctx: DesignerCtx): Promise<void> {
+  const rasterizer = ctx.rasterizer ?? new PlaywrightRasterizer();
+  const draftId = ctx.payload.draftId;
+  if (typeof draftId !== "string" || !draftId) {
+    throw new Error("draft tidak ditemukan");
+  }
+
+  const rows = await ctx.sql.rows<{
+    status: string;
+    format: string;
+    template: string;
+    slides: Slide[] | string;
+    focal_y: number;
+    source_name: string;
+    handle: string;
+    accent: string;
+  }>(
+    `select d.status, d.format, d.template, d.slides, d.focal_y,
+            s.name as source_name, b.handle, b.accent
+     from drafts d
+     join topics t on t.id = d.topic_id
+     join sources s on s.id = t.source_id
+     cross join brand b
+     where d.id = $1 and b.id = 1`,
+    [draftId],
+  );
+  const draft = rows[0];
+  if (!draft) {
+    throw new Error("draft tidak ditemukan");
+  }
+
+  const allSlides: Slide[] =
+    typeof draft.slides === "string" ? (JSON.parse(draft.slides) as Slide[]) : draft.slides;
+  const format = draft.format as "carousel_full" | "teaser_bio";
+  const selected = slidesForFormat(format, allSlides);
+  const template = draft.template as SlideTemplate;
+  const current = draft.status as DraftStatus;
+
+  await ctx.sql.rows(`delete from assets where draft_id = $1`, [draftId]);
+
+  try {
+    for (let index = 0; index < selected.length; index++) {
+      const html = renderSlideHtml({
+        template,
+        slide: selected[index],
+        index,
+        total: selected.length,
+        handle: draft.handle,
+        sourceName: draft.source_name,
+        accent: draft.accent,
+        focalY: draft.focal_y,
+        photoDataUrl: null,
+      });
+      const bytes = await rasterizer.toPng(html);
+      await ctx.sql.rows(
+        `insert into assets (id, draft_id, slide_index, bytes) values ($1, $2, $3, $4)`,
+        [randomUUID(), draftId, index, bytes],
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.sql.rows(`update drafts set error = $1 where id = $2`, [message, draftId]);
+    throw error;
+  }
+
+  const nextStatus: DraftStatus = current === "drafted" ? "needs_review" : current;
+  if (current === "drafted") {
+    assertTransition("worker", current, "needs_review");
+  }
+
+  await ctx.sql.rows(
+    `update drafts set status = $1, text_dirty = false, error = null, updated_at = $2 where id = $3`,
+    [nextStatus, ctx.now, draftId],
+  );
+
+  const coverHeadline = selected[0]?.headline ?? "draft";
+  await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+    randomUUID(),
+    "designer",
+    `Gambar selesai untuk "${coverHeadline}"`,
+  ]);
+}
+
 
 export async function runPublisher(_ctx: JobCtx): Promise<void> {}
 
