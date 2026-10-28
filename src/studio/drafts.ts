@@ -5,6 +5,25 @@ import { assertTransition, type DraftStatus } from "../domain/status";
 import { slidesForFormat } from "../render/html";
 import { enqueue } from "../jobs/runner";
 
+const COVER_PHOTO_DATA_URL =
+  /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/;
+const MAX_COVER_PHOTO_BYTES = 2 * 1024 * 1024;
+
+function validateCoverPhotoDataUrl(photoDataUrl: string): string {
+  if (photoDataUrl.trim() !== photoDataUrl || /[\s"']/.test(photoDataUrl)) {
+    throw new Error("Format gambar tidak valid");
+  }
+  if (!COVER_PHOTO_DATA_URL.test(photoDataUrl)) {
+    throw new Error("Gambar harus PNG atau JPEG");
+  }
+  const base64 = photoDataUrl.slice(photoDataUrl.indexOf(",") + 1);
+  const byteLength = Math.floor((base64.length * 3) / 4);
+  if (byteLength > MAX_COVER_PHOTO_BYTES) {
+    throw new Error("Gambar maksimal 2 MB");
+  }
+  return photoDataUrl;
+}
+
 export type DraftCard = {
   id: string;
   status: DraftStatus;
@@ -121,7 +140,15 @@ async function loadDraftRow(sql: Sql, id: string): Promise<DraftRow> {
   return row;
 }
 
+function statusesForReviewTab(status: DraftStatus): DraftStatus[] {
+  if (status === "scheduled") {
+    return ["scheduled", "posting"];
+  }
+  return [status];
+}
+
 export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCard[]> {
+  const statuses = statusesForReviewTab(status);
   const rows = await sql.rows<
     DraftRow & { updated_at: Date; asset_id: string | null }
   >(
@@ -132,9 +159,9 @@ export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCa
      join topics t on t.id = d.topic_id
      join sources s on s.id = t.source_id
      cross join brand b
-     where d.status = $1 and b.id = 1
+     where d.status = any($1::text[]) and b.id = 1
      order by d.updated_at desc`,
-    [status],
+    [statuses],
   );
   return rows.map((row) => {
     const slides = parseSlides(row.slides);
@@ -261,9 +288,10 @@ export async function saveCoverPhoto(
 ): Promise<void> {
   requireReviewWrite(role);
   const row = await loadDraftRow(sql, id);
+  const safeUrl = validateCoverPhotoDataUrl(photoDataUrl);
   const slides = parseSlides(row.slides);
   const updated = slides.map((slide) =>
-    slide.role === "cover" ? ({ ...slide, photoDataUrl } as Slide & { photoDataUrl?: string }) : slide,
+    slide.role === "cover" ? ({ ...slide, photoDataUrl: safeUrl } as Slide & { photoDataUrl?: string }) : slide,
   );
   await sql.rows(
     `update drafts set slides = $1::jsonb, text_dirty = true, updated_at = now() where id = $2`,
@@ -317,27 +345,51 @@ export async function approveDraft(sql: Sql, role: Role, id: string): Promise<vo
   await sql.rows(`update drafts set status = 'approved', updated_at = now() where id = $1`, [id]);
 }
 
+export async function scheduleDraftInTx(
+  tx: Sql,
+  role: Role,
+  id: string,
+  scheduledAt: Date,
+): Promise<void> {
+  requirePublish(role);
+  const row = await loadDraftRow(tx, id);
+  blockIfDirty(row.text_dirty);
+  if (scheduledAt.getTime() <= Date.now()) {
+    throw new Error("Jadwal harus di masa depan");
+  }
+  assertTransition("human", row.status, "scheduled");
+  await tx.rows(
+    `update drafts set status = 'scheduled', scheduled_at = $1, updated_at = now() where id = $2`,
+    [scheduledAt, id],
+  );
+  await enqueue(tx, {
+    name: "publisher.publish",
+    payload: { draftId: id },
+    runAt: scheduledAt,
+  });
+}
+
 export async function scheduleDraft(
   sql: Sql,
   role: Role,
   id: string,
   scheduledAt: Date,
 ): Promise<void> {
-  requirePublish(role);
-  const row = await loadDraftRow(sql, id);
-  blockIfDirty(row.text_dirty);
-  if (scheduledAt.getTime() <= Date.now()) {
-    throw new Error("Jadwal harus di masa depan");
+  await sql.tx(async (tx) => {
+    await scheduleDraftInTx(tx, role, id, scheduledAt);
+  });
+}
+
+async function postDraftNowInTx(tx: Sql, role: Role, id: string, row: DraftRow, now: Date): Promise<void> {
+  if (row.status === "needs_review") {
+    await tx.rows(`update drafts set status = 'approved', updated_at = $1 where id = $2`, [now, id]);
   }
-  assertTransition("human", row.status, "scheduled");
-  await sql.rows(
-    `update drafts set status = 'scheduled', scheduled_at = $1, updated_at = now() where id = $2`,
-    [scheduledAt, id],
-  );
-  await enqueue(sql, {
+  await tx.rows(`update drafts set status = 'posting', updated_at = $1 where id = $2`, [now, id]);
+  await enqueue(tx, {
     name: "publisher.publish",
     payload: { draftId: id },
-    runAt: scheduledAt,
+    runAt: now,
+    manual: true,
   });
 }
 
@@ -348,16 +400,11 @@ export async function postDraftNow(sql: Sql, role: Role, id: string): Promise<vo
   const now = new Date();
   if (row.status === "needs_review") {
     assertTransition("human", "needs_review", "approved");
-    await sql.rows(`update drafts set status = 'approved', updated_at = $1 where id = $2`, [now, id]);
   }
   const current = row.status === "needs_review" ? "approved" : row.status;
   assertTransition("human", current as DraftStatus, "posting");
-  await sql.rows(`update drafts set status = 'posting', updated_at = $1 where id = $2`, [now, id]);
-  await enqueue(sql, {
-    name: "publisher.publish",
-    payload: { draftId: id },
-    runAt: now,
-    manual: true,
+  await sql.tx(async (tx) => {
+    await postDraftNowInTx(tx, role, id, row, now);
   });
 }
 
@@ -391,19 +438,26 @@ export async function deleteDraft(sql: Sql, role: Role, id: string): Promise<voi
   });
 }
 
-export async function retryFailed(sql: Sql, role: Role, id: string): Promise<void> {
-  requirePublish(role);
-  const row = await loadDraftRow(sql, id);
-  assertTransition("human", row.status, "posting");
-  const now = new Date();
-  await sql.rows(
+async function retryFailedInTx(tx: Sql, id: string, now: Date): Promise<void> {
+  await tx.rows(
     `update drafts set status = 'posting', error = null, updated_at = $1 where id = $2`,
     [now, id],
   );
-  await enqueue(sql, {
+  await enqueue(tx, {
     name: "publisher.publish",
     payload: { draftId: id },
     runAt: now,
     manual: true,
+  });
+}
+
+export async function retryFailed(sql: Sql, role: Role, id: string): Promise<void> {
+  requirePublish(role);
+  const row = await loadDraftRow(sql, id);
+  blockIfDirty(row.text_dirty);
+  assertTransition("human", row.status, "posting");
+  const now = new Date();
+  await sql.tx(async (tx) => {
+    await retryFailedInTx(tx, id, now);
   });
 }

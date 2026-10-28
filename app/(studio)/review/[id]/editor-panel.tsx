@@ -60,10 +60,14 @@ const FORMATS: { value: DraftView["format"]; label: string }[] = [
   { value: "teaser_bio", label: "Teaser + link bio" },
 ];
 
-function slideSrc(draft: DraftView, index: number): string {
+function previewSlideSrc(draft: DraftView, index: number): string {
   if (draft.usePublicMedia && draft.assetIds[index]) {
     return `/media/${draft.assetIds[index]}`;
   }
+  return `/review/${draft.id}/slide/${index}`;
+}
+
+function downloadSlideSrc(draft: DraftView, index: number): string {
   return `/review/${draft.id}/slide/${index}`;
 }
 
@@ -165,7 +169,26 @@ export function EditorPanel({
     window.setTimeout(() => setCopyLabel("Copy caption + hashtag"), 1600);
   }
 
-  const publishBlocked = draft.textDirty;
+  const savedCoverHeadline = coverSlide(draft.slides).headline;
+
+  const hasUnsavedTextEdits = useMemo(() => {
+    const hashtags = hashtagsText
+      .split(/[,\s]+/)
+      .map((t) => t.replace(/^#/, "").trim())
+      .filter(Boolean);
+    const hashtagsMatch =
+      hashtags.length === draft.hashtags.length &&
+      hashtags.every((tag, i) => tag === draft.hashtags[i]);
+    return headline !== savedCoverHeadline || caption !== draft.caption || !hashtagsMatch;
+  }, [headline, caption, hashtagsText, draft.caption, draft.hashtags, savedCoverHeadline]);
+
+  function commitFocalFromInput(input: HTMLInputElement) {
+    const value = Number(input.value);
+    setFocalY(value);
+    run(() => saveFocalAction(draft.id, value));
+  }
+
+  const publishBlocked = draft.textDirty || hasUnsavedTextEdits;
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -203,7 +226,7 @@ export function EditorPanel({
             <div className="space-y-3">
               <div className="aspect-[4/5] bg-[var(--panel-2)] rounded-lg overflow-hidden border border-[var(--line)]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={slideSrc(draft, clampedIndex)} alt="" className="size-full object-cover" />
+                <img src={previewSlideSrc(draft, clampedIndex)} alt="" className="size-full object-cover" />
               </div>
               <div className="flex items-center justify-between gap-2">
                 <Button
@@ -241,8 +264,9 @@ export function EditorPanel({
                   disabled={!canWrite || pending}
                   className="mt-2 w-full"
                   onChange={(e) => setFocalY(Number(e.target.value))}
-                  onMouseUp={() => run(() => saveFocalAction(draft.id, focalY))}
-                  onTouchEnd={() => run(() => saveFocalAction(draft.id, focalY))}
+                  onMouseUp={(e) => commitFocalFromInput(e.currentTarget)}
+                  onTouchEnd={(e) => commitFocalFromInput(e.currentTarget)}
+                  onKeyUp={(e) => commitFocalFromInput(e.currentTarget)}
                 />
               </label>
               {canWrite ? (
@@ -339,7 +363,7 @@ export function EditorPanel({
               <Button
                 type="button"
                 size="sm"
-                disabled={pending}
+                disabled={pending || publishBlocked}
                 onClick={() => run(() => retryFailedAction(draft.id))}
               >
                 Coba lagi
@@ -513,7 +537,7 @@ export function EditorPanel({
               onClick={() => {
                 for (let i = 0; i < slideTotal; i++) {
                   const a = document.createElement("a");
-                  a.href = slideSrc(draft, i);
+                  a.href = downloadSlideSrc(draft, i);
                   a.download = `slide-${i + 1}.png`;
                   a.click();
                 }
@@ -524,7 +548,7 @@ export function EditorPanel({
             {Array.from({ length: slideTotal }, (_, i) => (
               <a
                 key={i}
-                href={slideSrc(draft, i)}
+                href={downloadSlideSrc(draft, i)}
                 download={`slide-${i + 1}.png`}
                 className="text-xs underline text-[var(--muted)] hover:text-[var(--ink)]"
               >

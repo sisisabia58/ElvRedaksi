@@ -93,7 +93,10 @@ export function ReviewPanel({
 
       <div className="flex flex-wrap gap-2">
         {TAB_STATUSES.map((tab) => {
-          const count = counts[tab.status] ?? 0;
+          const count =
+            tab.status === "scheduled"
+              ? (counts.scheduled ?? 0) + (counts.posting ?? 0)
+              : (counts[tab.status] ?? 0);
           const active = tab.status === status;
           return (
             <Link
