@@ -16,9 +16,10 @@ export type SourceRow = {
 };
 
 const sourceInputSchema = z.object({
-  name: z.string().min(2, "Nama 2–80 karakter.").max(80, "Nama 2–80 karakter."),
+  name: z.string().trim().min(2, "Nama 2–80 karakter.").max(80, "Nama 2–80 karakter."),
   url: z
     .string()
+    .trim()
     .url("URL tidak valid.")
     .refine((value) => {
       try {
@@ -46,7 +47,7 @@ export async function addSource(
   const parsed = sourceInputSchema.parse(input);
   await sql.rows(
     `insert into sources (id, name, url, lang) values ($1, $2, $3, $4)`,
-    [randomUUID(), parsed.name.trim(), parsed.url.trim(), parsed.lang],
+    [randomUUID(), parsed.name, parsed.url, parsed.lang],
   );
 }
 

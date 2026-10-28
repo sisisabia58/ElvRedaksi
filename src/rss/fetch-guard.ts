@@ -4,6 +4,7 @@ import { Agent, fetch as undiciFetch } from "undici";
 
 const PRIVATE_FETCH_MESSAGE = "URL tidak boleh menunjuk ke localhost atau jaringan pribadi.";
 export const DNS_FETCH_MESSAGE = "Gagal menyelesaikan hostname.";
+export const FETCH_BODY_TOO_LARGE_MESSAGE = "Response terlalu besar.";
 export const MAX_FETCH_BYTES = 1_000_000;
 const MAX_REDIRECTS = 5;
 
@@ -64,6 +65,9 @@ function isBlockedIpv4Literal(host: string): boolean {
   if (n >= 0xa9fe0000 && n <= 0xa9feffff) {
     return true;
   }
+  if (n >= 0xe0000000 && n <= 0xefffffff) {
+    return true;
+  }
   return false;
 }
 
@@ -119,10 +123,40 @@ function ipv4FromMappedIpv6(host: string): string | null {
     return null;
   }
   const vals = parts.map((part) => hextet(part.padStart(4, "0")));
-  if (vals.slice(0, 5).some((value) => value !== 0)) {
+  if (vals[5] === 0xffff) {
+    const n = (vals[6] << 16) + vals[7];
+    return ipv4Dotted(n >>> 0);
+  }
+  if (vals[4] === 0xffff && vals[5] === 0) {
+    const n = (vals[6] << 16) + vals[7];
+    return ipv4Dotted(n >>> 0);
+  }
+  return null;
+}
+
+function ipv4FromCompatEmbedded(host: string): string | null {
+  const parts = expandIpv6(host);
+  if (!parts || parts.length !== 8) {
     return null;
   }
-  if (vals[5] !== 0xffff) {
+  const vals = parts.map((part) => hextet(part.padStart(4, "0")));
+  if (vals[5] === 0xffff) {
+    return null;
+  }
+  if (vals.slice(0, 6).some((value) => value !== 0)) {
+    return null;
+  }
+  const n = (vals[6] << 16) + vals[7];
+  return ipv4Dotted(n >>> 0);
+}
+
+function ipv4FromTeredo(host: string): string | null {
+  const parts = expandIpv6(host);
+  if (!parts || parts.length !== 8) {
+    return null;
+  }
+  const vals = parts.map((part) => hextet(part.padStart(4, "0")));
+  if (vals[0] !== 0x2001 || vals[1] !== 0) {
     return null;
   }
   const n = (vals[6] << 16) + vals[7];
@@ -151,16 +185,19 @@ function ipv4FromNat64(host: string): string | null {
   if (vals[0] !== 0x64 || vals[1] !== 0xff9b) {
     return null;
   }
-  if (vals.slice(2, 6).some((value) => value !== 0)) {
-    return null;
-  }
   const n = (vals[6] << 16) + vals[7];
   return ipv4Dotted(n >>> 0);
 }
 
 function isBlockedIpv6Literal(host: string): boolean {
   const stripped = stripBrackets(host);
-  for (const decode of [ipv4FromMappedIpv6, ipv4From6to4, ipv4FromNat64]) {
+  for (const decode of [
+    ipv4FromMappedIpv6,
+    ipv4FromCompatEmbedded,
+    ipv4From6to4,
+    ipv4FromNat64,
+    ipv4FromTeredo,
+  ]) {
     const embedded = decode(host);
     if (embedded && isBlockedIpv4Literal(embedded)) {
       return true;
@@ -185,6 +222,9 @@ function isBlockedIpv6Literal(host: string): boolean {
   if ((first & 0xffc0) === 0xfe80) {
     return true;
   }
+  if ((first & 0xff00) === 0xff00) {
+    return true;
+  }
   return false;
 }
 
@@ -200,6 +240,9 @@ function isBlockedIpAddress(address: string): boolean {
 }
 
 async function resolveHostAddresses(hostname: string, timeoutMs: number): Promise<string[]> {
+  if (timeoutMs <= 0) {
+    throw new Error(DNS_FETCH_MESSAGE);
+  }
   const host = stripBrackets(hostname).toLowerCase();
   if (host === "localhost") {
     return ["127.0.0.1"];
@@ -320,6 +363,7 @@ async function readResponseTextLimited(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let truncated = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -332,6 +376,7 @@ async function readResponseTextLimited(
         total += take;
       }
       if (total >= maxBytes) {
+        truncated = value.byteLength > take || !done;
         await reader.cancel();
         break;
       }
@@ -339,12 +384,15 @@ async function readResponseTextLimited(
   } finally {
     reader.releaseLock();
   }
+  if (truncated) {
+    throw new Error(FETCH_BODY_TOO_LARGE_MESSAGE);
+  }
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
 async function fetchPinnedUrl(
   url: string,
-  timeoutMs: number,
+  signal: AbortSignal,
   hostname: string,
   addresses: string[],
 ): Promise<{ response: Awaited<ReturnType<typeof undiciFetch>>; close: () => Promise<void> }> {
@@ -356,7 +404,7 @@ async function fetchPinnedUrl(
   try {
     const response = await undiciFetch(url, {
       dispatcher,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
       redirect: "manual",
     });
     return {
@@ -370,6 +418,16 @@ async function fetchPinnedUrl(
 }
 
 export async function fetchPublicText(url: string, timeoutMs: number): Promise<string> {
+  const deadlineAt = Date.now() + timeoutMs;
+  const abortSignal = AbortSignal.timeout(timeoutMs);
+  const remainingMs = () => {
+    const left = deadlineAt - Date.now();
+    if (left <= 0) {
+      throw new Error(DNS_FETCH_MESSAGE);
+    }
+    return left;
+  };
+
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     let parsed: URL;
@@ -381,8 +439,8 @@ export async function fetchPublicText(url: string, timeoutMs: number): Promise<s
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error("URL tidak valid.");
     }
-    const addresses = await resolveAllowedFetchAddresses(parsed.hostname, timeoutMs);
-    const { response, close } = await fetchPinnedUrl(current, timeoutMs, parsed.hostname, addresses);
+    const addresses = await resolveAllowedFetchAddresses(parsed.hostname, remainingMs());
+    const { response, close } = await fetchPinnedUrl(current, abortSignal, parsed.hostname, addresses);
     try {
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");

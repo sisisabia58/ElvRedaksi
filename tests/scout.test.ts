@@ -68,6 +68,12 @@ describe("scout", () => {
     await expect(addSource(sql, "viewer", { name: "X", url: "https://x.example/feed", lang: "EN" })).rejects.toThrow(
       /forbidden/,
     );
+    await expect(addSource(sql, "admin", { name: "  ", url: "https://news.example/feed", lang: "ID" })).rejects.toThrow(
+      /Nama 2/,
+    );
+    await expect(addSource(sql, "admin", { name: " a", url: "https://news.example/feed", lang: "ID" })).rejects.toThrow(
+      /Nama 2/,
+    );
   });
 
   it("queues the next scout.scan after runDueJobs finishes the in-flight job", async () => {
@@ -116,6 +122,12 @@ describe("scout", () => {
     expect(await isBlockedFetchTarget("http://[2002:7f00:1::]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[64:ff9b::7f00:1]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[fd12:3456:789a:1:2:3:4:5]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::169.254.169.254]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::ffff:0:169.254.169.254]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[2001::a9fe:a9fe]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[64:ff9b:1::a9fe:a9fe]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://224.0.0.1/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[ff02::1]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://1.1.1.1/")).toBe(false);
 
     const sql = await createTestSql();
