@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTestSql } from "../src/db/client";
-import { analyticsView } from "../src/studio/analytics";
+import { analyticsView, followerLineCoordinates } from "../src/studio/analytics";
 import { runInsights } from "../src/jobs/handlers";
 
 describe("analytics", () => {
@@ -216,6 +216,35 @@ describe("analytics", () => {
       { date: "2026-10-20", views: 20, reach: 15, followers: 900 },
       { date: "2026-10-28", views: 22, reach: 16, followers: null },
     ]);
+  });
+
+  it("places the only measured follower day at the end of a 28-day width", () => {
+    const width = 640;
+    const daily = Array.from({ length: 28 }, (_, index) => ({
+      date: `2026-10-${String(index + 1).padStart(2, "0")}`,
+      views: 0,
+      reach: 0,
+      followers: index === 27 ? 42 : null,
+    }));
+    const points = followerLineCoordinates(daily, width, 160);
+    expect(points).toHaveLength(28);
+    expect(points[27]).toEqual({ x: width, y: 80 });
+    expect(points.slice(0, 27).every((point) => point == null)).toBe(true);
+  });
+
+  it("keeps a null follower day as a gap so the neighbors stay on their daily slots", () => {
+    const width = 270;
+    const daily = Array.from({ length: 28 }, (_, index) => ({
+      date: `d-${index}`,
+      views: 1,
+      reach: 1,
+      followers: index === 0 ? 10 : index === 2 ? 20 : null,
+    }));
+    const points = followerLineCoordinates(daily, width, 160);
+    expect(points[1]).toBeNull();
+    expect(points[0]?.x).toBe(0);
+    expect(points[2]?.x).toBe((2 / 27) * width);
+    expect(points[2]!.x).toBeLessThan(width / 2);
   });
 });
 

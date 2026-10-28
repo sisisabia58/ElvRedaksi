@@ -69,6 +69,30 @@ export type AnalyticsView = {
   posts: AnalyticsPost[];
 };
 
+const FOLLOWER_CHART_PAD = 8;
+
+export function followerLineCoordinates(
+  daily: readonly { followers: number | null }[],
+  width: number,
+  height: number,
+): Array<{ x: number; y: number } | null> {
+  const values = daily.flatMap((point) => (point.followers == null ? [] : [point.followers]));
+  if (values.length === 0) return daily.map(() => null);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min;
+  const last = daily.length - 1;
+  return daily.map((point, index) => {
+    if (point.followers == null) return null;
+    const x = last === 0 ? width / 2 : (index / last) * width;
+    const y =
+      span === 0
+        ? height / 2
+        : height - FOLLOWER_CHART_PAD - ((point.followers - min) / span) * (height - FOLLOWER_CHART_PAD * 2);
+    return { x, y };
+  });
+}
+
 type SnapshotRow = {
   id: string;
   taken_at: Date | string;

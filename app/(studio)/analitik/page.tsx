@@ -8,6 +8,7 @@ import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { TIME_ZONE } from "@/src/domain/constants";
 import {
   analyticsView,
+  followerLineCoordinates,
   parseAnalyticsSort,
   type AnalyticsPost,
   type AnalyticsSort,
@@ -290,31 +291,35 @@ function ViewsBars({ daily }: { daily: DailyPoint[] }) {
 }
 
 function FollowersLine({ daily }: { daily: DailyPoint[] }) {
-  const measured = daily.filter((point): point is DailyPoint & { followers: number } => point.followers != null);
-  if (measured.length === 0) return null;
   const width = 640;
   const height = 160;
-  const pad = 8;
-  const values = measured.map((point) => point.followers);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  const coords = measured.map((point, index) => {
-    const x = measured.length === 1 ? width / 2 : (index / (measured.length - 1)) * (width - pad * 2) + pad;
-    const y = span === 0 ? height / 2 : height - pad - ((point.followers - min) / span) * (height - pad * 2);
-    return { x, y };
-  });
+  const coords = followerLineCoordinates(daily, width, height);
+  const segments: { x: number; y: number }[][] = [];
+  let current: { x: number; y: number }[] = [];
+  for (const point of coords) {
+    if (point == null) {
+      if (current.length > 0) segments.push(current);
+      current = [];
+      continue;
+    }
+    current.push(point);
+  }
+  if (current.length > 0) segments.push(current);
+  if (segments.length === 0) return null;
   return (
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Pertumbuhan followers" className="h-40 w-full">
-      {coords.length === 1 ? (
-        <circle cx={coords[0].x} cy={coords[0].y} r="3.5" fill="#34d399" />
-      ) : (
-        <polyline
-          fill="none"
-          stroke="#34d399"
-          strokeWidth="2"
-          points={coords.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")}
-        />
+      {segments.map((segment, index) =>
+        segment.length === 1 ? (
+          <circle key={index} cx={segment[0].x} cy={segment[0].y} r="3.5" fill="#34d399" />
+        ) : (
+          <polyline
+            key={index}
+            fill="none"
+            stroke="#34d399"
+            strokeWidth="2"
+            points={segment.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")}
+          />
+        ),
       )}
     </svg>
   );
