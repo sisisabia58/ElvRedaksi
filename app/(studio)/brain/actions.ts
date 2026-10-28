@@ -8,6 +8,7 @@ import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { createNote, deleteNote, saveBrain } from "@/src/studio/brain";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
+export type CreateNoteResult = { ok: true; slug: string } | { ok: false; error: string };
 
 function toActionResult(error: unknown): ActionResult {
   if (error instanceof ZodError) {
@@ -44,15 +45,28 @@ export async function saveBrainAction(slug: string, body: string): Promise<Actio
   }
 }
 
-export async function createNoteAction(title: string) {
-  const { sql, user } = await requireUser();
-  const note = await createNote(sql, user.role, title);
-  revalidatePath("/brain");
-  return note.slug;
+export async function createNoteAction(title: string): Promise<CreateNoteResult> {
+  try {
+    const { sql, user } = await requireUser();
+    const note = await createNote(sql, user.role, title);
+    revalidatePath("/brain");
+    return { ok: true, slug: note.slug };
+  } catch (error) {
+    const failed = toActionResult(error);
+    if (!failed.ok) {
+      return failed;
+    }
+    return { ok: false, error: "Terjadi kesalahan" };
+  }
 }
 
-export async function deleteNoteAction(slug: string) {
-  const { sql, user } = await requireUser();
-  await deleteNote(sql, user.role, slug);
-  revalidatePath("/brain");
+export async function deleteNoteAction(slug: string): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireUser();
+    await deleteNote(sql, user.role, slug);
+    revalidatePath("/brain");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
 }

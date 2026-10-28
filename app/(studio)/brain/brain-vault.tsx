@@ -43,6 +43,8 @@ export function BrainVault({
   const [deleteSlug, setDeleteSlug] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     setBody(selected?.body ?? "");
@@ -81,6 +83,7 @@ export function BrainVault({
                     className="px-3 text-[var(--muted)] hover:text-destructive"
                     onClick={() => {
                       setDeleteSlug(doc.slug);
+                      setDeleteError(null);
                       setDeleteOpen(true);
                     }}
                   >
@@ -97,7 +100,10 @@ export function BrainVault({
               type="button"
               variant="outline"
               className="w-full border-[var(--line)]"
-              onClick={() => setCreateOpen(true)}
+              onClick={() => {
+                setCreateError(null);
+                setCreateOpen(true);
+              }}
             >
               catatan-baru
             </Button>
@@ -150,7 +156,15 @@ export function BrainVault({
         )}
       </section>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) {
+            setCreateError(null);
+          }
+        }}
+      >
         <DialogContent showCloseButton>
           <DialogHeader>
             <DialogTitle>Catatan baru</DialogTitle>
@@ -164,17 +178,27 @@ export function BrainVault({
               maxLength={80}
             />
           </div>
+          {createError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {createError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               type="button"
               disabled={pending || !newTitle.trim()}
               onClick={() => {
                 startTransition(async () => {
-                  const slug = await createNoteAction(newTitle);
-                  setCreateOpen(false);
-                  setNewTitle("");
-                  router.push(`/brain?slug=${encodeURIComponent(slug)}`);
-                  router.refresh();
+                  const result = await createNoteAction(newTitle);
+                  if (result.ok) {
+                    setCreateOpen(false);
+                    setNewTitle("");
+                    setCreateError(null);
+                    router.push(`/brain?slug=${encodeURIComponent(result.slug)}`);
+                    router.refresh();
+                  } else {
+                    setCreateError(result.error);
+                  }
                 });
               }}
             >
@@ -184,12 +208,26 @@ export function BrainVault({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          setDeleteOpen(open);
+          if (!open) {
+            setDeleteError(null);
+            setDeleteSlug(null);
+          }
+        }}
+      >
         <DialogContent showCloseButton>
           <DialogHeader>
             <DialogTitle>Hapus catatan</DialogTitle>
             <DialogDescription>Hapus catatan ini?</DialogDescription>
           </DialogHeader>
+          {deleteError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {deleteError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setDeleteOpen(false)}>
               Batal
@@ -201,11 +239,16 @@ export function BrainVault({
               onClick={() => {
                 if (!deleteSlug) return;
                 startTransition(async () => {
-                  await deleteNoteAction(deleteSlug);
-                  setDeleteOpen(false);
-                  setDeleteSlug(null);
-                  router.push("/brain");
-                  router.refresh();
+                  const result = await deleteNoteAction(deleteSlug);
+                  if (result.ok) {
+                    setDeleteOpen(false);
+                    setDeleteSlug(null);
+                    setDeleteError(null);
+                    router.push("/brain");
+                    router.refresh();
+                  } else {
+                    setDeleteError(result.error);
+                  }
                 });
               }}
             >
