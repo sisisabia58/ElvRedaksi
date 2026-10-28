@@ -1,7 +1,10 @@
-import { lookup } from "node:dns/promises";
+import { lookup as dnsLookupPromises } from "node:dns/promises";
 import { isIP } from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const PRIVATE_FETCH_MESSAGE = "URL tidak boleh menunjuk ke localhost atau jaringan pribadi.";
+export const MAX_FETCH_BYTES = 1_000_000;
+const MAX_REDIRECTS = 5;
 
 function stripBrackets(host: string): string {
   const trimmed = host.trim();
@@ -56,12 +59,24 @@ function isBlockedIpv4Literal(host: string): boolean {
   return false;
 }
 
-function expandIpv6(host: string): string[] | null {
-  const lower = stripBrackets(host).toLowerCase();
-  if (!/^[0-9a-f:]+$/.test(lower)) {
-    return null;
+function normalizeIpv6Host(host: string): string {
+  const h = stripBrackets(host).toLowerCase();
+  const v4tail = h.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (!v4tail) {
+    return h;
   }
-  if (lower.includes(".")) {
+  const n = parseIpv4(v4tail[2] ?? "");
+  if (n === null) {
+    return h;
+  }
+  const hi = ((n >>> 16) & 0xffff).toString(16);
+  const lo = (n & 0xffff).toString(16);
+  return `${v4tail[1]}${hi}:${lo}`;
+}
+
+function expandIpv6(host: string): string[] | null {
+  const lower = normalizeIpv6Host(host);
+  if (!/^[0-9a-f:]+$/.test(lower)) {
     return null;
   }
   const [head, tail] = lower.split("::");
@@ -84,7 +99,27 @@ function hextet(value: string): number {
   return Number.parseInt(value, 16);
 }
 
+function ipv4FromMappedIpv6(host: string): string | null {
+  const parts = expandIpv6(host);
+  if (!parts || parts.length !== 8) {
+    return null;
+  }
+  const vals = parts.map((part) => hextet(part.padStart(4, "0")));
+  if (vals.slice(0, 5).some((value) => value !== 0)) {
+    return null;
+  }
+  if (vals[5] !== 0xffff) {
+    return null;
+  }
+  const n = (vals[6] << 16) + vals[7];
+  return `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
+}
+
 function isBlockedIpv6Literal(host: string): boolean {
+  const mapped = ipv4FromMappedIpv6(host);
+  if (mapped && isBlockedIpv4Literal(mapped)) {
+    return true;
+  }
   const parts = expandIpv6(host);
   if (!parts || parts.length !== 8) {
     return false;
@@ -124,11 +159,20 @@ async function resolveHostAddresses(hostname: string): Promise<string[]> {
   if (literalKind === 4 || literalKind === 6) {
     return [host];
   }
-  const results = await lookup(host, { all: true, verbatim: true });
+  const results = await dnsLookupPromises(host, { all: true, verbatim: true });
   if (results.length === 0) {
     throw new Error("dns empty");
   }
   return results.map((entry) => entry.address);
+}
+
+export async function resolveAllowedFetchAddresses(hostname: string): Promise<string[]> {
+  const addresses = await resolveHostAddresses(hostname);
+  const allowed = addresses.filter((address) => !isBlockedIpAddress(address));
+  if (allowed.length === 0) {
+    throw new Error(PRIVATE_FETCH_MESSAGE);
+  }
+  return allowed;
 }
 
 export async function isBlockedFetchTarget(url: string): Promise<boolean> {
@@ -142,12 +186,7 @@ export async function isBlockedFetchTarget(url: string): Promise<boolean> {
     return true;
   }
   try {
-    const addresses = await resolveHostAddresses(parsed.hostname);
-    for (const address of addresses) {
-      if (isBlockedIpAddress(address)) {
-        return true;
-      }
-    }
+    await resolveAllowedFetchAddresses(parsed.hostname);
     return false;
   } catch {
     return true;
@@ -160,16 +199,75 @@ export async function assertPublicFetchUrl(url: string): Promise<void> {
   }
 }
 
-const MAX_REDIRECTS = 5;
+function createPinnedLookup(hostname: string, addresses: string[]) {
+  const expected = stripBrackets(hostname).toLowerCase();
+  let cursor = 0;
+  return (
+    lookupHost: string,
+    _options: unknown,
+    callback: (err: Error | null, address: string, family: number) => void,
+  ) => {
+    const host = stripBrackets(lookupHost).toLowerCase();
+    if (host !== expected) {
+      callback(new Error("unexpected host"), "", 0);
+      return;
+    }
+    const address = addresses[cursor % addresses.length];
+    cursor += 1;
+    const family = isIP(address) === 6 ? 6 : 4;
+    callback(null, address, family);
+  };
+}
+
+async function readResponseTextLimited(response: Awaited<ReturnType<typeof undiciFetch>>, maxBytes: number): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || !value) {
+        break;
+      }
+      const take = Math.min(value.byteLength, maxBytes - total);
+      if (take > 0) {
+        chunks.push(value.subarray(0, take));
+        total += take;
+      }
+      if (total >= maxBytes) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+async function fetchPinnedUrl(url: string, timeoutMs: number): Promise<Response> {
+  const parsed = new URL(url);
+  const addresses = await resolveAllowedFetchAddresses(parsed.hostname);
+  const dispatcher = new Agent({
+    connect: {
+      lookup: createPinnedLookup(parsed.hostname, addresses),
+    },
+  });
+  return undiciFetch(url, {
+    dispatcher,
+    signal: AbortSignal.timeout(timeoutMs),
+    redirect: "manual",
+  });
+}
 
 export async function fetchPublicText(url: string, timeoutMs: number): Promise<string> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     await assertPublicFetchUrl(current);
-    const response = await fetch(current, {
-      signal: AbortSignal.timeout(timeoutMs),
-      redirect: "manual",
-    });
+    const response = await fetchPinnedUrl(current, timeoutMs);
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) {
@@ -181,7 +279,7 @@ export async function fetchPublicText(url: string, timeoutMs: number): Promise<s
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    return response.text();
+    return readResponseTextLimited(response, MAX_FETCH_BYTES);
   }
   throw new Error("Terlalu banyak redirect");
 }

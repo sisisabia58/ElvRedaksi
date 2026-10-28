@@ -86,26 +86,28 @@ function resolveLinkFromItem(itemNodes: PreserveNode[]): string {
   if (textLink) {
     return textLink;
   }
+  let fallbackHref = "";
   for (const node of itemNodes) {
     if (typeof node !== "object" || node === null || !("link" in node)) {
       continue;
     }
-    const linkNodes = asArray((node as PreserveNode).link);
-    for (const linkNode of linkNodes) {
-      if (typeof linkNode !== "object" || linkNode === null) {
-        continue;
-      }
-      const attrs = (linkNode as PreserveNode)[":@"];
-      if (attrs && typeof attrs === "object") {
-        const rel = (attrs as Record<string, string>)["@_rel"];
-        const href = (attrs as Record<string, string>)["@_href"];
-        if ((!rel || rel === "alternate") && href) {
-          return href.trim();
-        }
-      }
+    const attrs = (node as PreserveNode)[":@"];
+    if (!attrs || typeof attrs !== "object") {
+      continue;
+    }
+    const href = (attrs as Record<string, string>)["@_href"]?.trim();
+    if (!href) {
+      continue;
+    }
+    const rel = (attrs as Record<string, string>)["@_rel"];
+    if (!rel || rel === "alternate") {
+      return href;
+    }
+    if (!fallbackHref) {
+      fallbackHref = href;
     }
   }
-  return "";
+  return fallbackHref;
 }
 
 function validHttpUrl(url: string): string | null {

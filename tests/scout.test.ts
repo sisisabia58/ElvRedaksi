@@ -26,6 +26,10 @@ describe("scout", () => {
     expect(excerptFromHtml("<style>x</style><p>Halo <b>dunia</b></p><img src='https://news.example/a.jpg'>")).toBe(
       "Halo dunia",
     );
+    const atomXml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Atom</title>
+      <link href="https://news.example/atom-1" rel="alternate"/></entry></feed>`;
+    const atomItems = parseFeed(atomXml);
+    expect(atomItems[0]?.url).toBe("https://news.example/atom-1");
   });
 
   it("stores a topic, records an empty scan, and schedules the next one", async () => {
@@ -103,6 +107,9 @@ describe("scout", () => {
     expect(await isBlockedFetchTarget("http://192.168.0.1/")).toBe(true);
     expect(await isBlockedFetchTarget("http://169.254.169.254/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[::1]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::ffff:127.0.0.1]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::ffff:7f00:1]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::ffff:169.254.169.254]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://1.1.1.1/")).toBe(false);
 
     const sql = await createTestSql();
