@@ -2,10 +2,23 @@
 
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
+import { ZodError } from "zod";
 import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import type { SettingsInput } from "@/src/studio/settings";
-import { getSettings, saveInstagramToken, saveSettings } from "@/src/studio/settings";
+import { saveInstagramToken, saveSettings } from "@/src/studio/settings";
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+function toActionResult(error: unknown): ActionResult {
+  if (error instanceof ZodError) {
+    return { ok: false, error: error.issues[0]?.message ?? "Data tidak valid" };
+  }
+  if (error instanceof Error) {
+    return { ok: false, error: error.message };
+  }
+  return { ok: false, error: "Terjadi kesalahan" };
+}
 
 async function requireAdmin() {
   const cookieStore = await cookies();
@@ -21,29 +34,47 @@ async function requireAdmin() {
   return { sql, user };
 }
 
-export async function saveSettingsAction(input: SettingsInput) {
-  const { sql, user } = await requireAdmin();
-  await saveSettings(sql, user.role, input);
-  revalidatePath("/pengaturan");
+export async function saveSettingsAction(input: SettingsInput): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireAdmin();
+    await saveSettings(sql, user.role, input);
+    revalidatePath("/pengaturan");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
 }
 
-export async function saveInstagramConnectAction(igUserId: string, accessToken: string) {
-  const { sql, user } = await requireAdmin();
-  const settings = await getSettings(sql);
-  await saveInstagramToken(sql, user.role, {
-    igUserId,
-    accessToken,
-    username: settings.handle,
-  });
-  revalidatePath("/pengaturan");
+export async function saveInstagramConnectAction(
+  igUserId: string,
+  accessToken: string,
+  username: string,
+): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireAdmin();
+    await saveInstagramToken(sql, user.role, {
+      igUserId,
+      accessToken,
+      username,
+    });
+    revalidatePath("/pengaturan");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
 }
 
-export async function disconnectInstagramAction() {
-  const { sql, user } = await requireAdmin();
-  await saveInstagramToken(sql, user.role, {
-    igUserId: "",
-    accessToken: "",
-    username: "",
-  });
-  revalidatePath("/pengaturan");
+export async function disconnectInstagramAction(): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireAdmin();
+    await saveInstagramToken(sql, user.role, {
+      igUserId: "",
+      accessToken: "",
+      username: "",
+    });
+    revalidatePath("/pengaturan");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
 }

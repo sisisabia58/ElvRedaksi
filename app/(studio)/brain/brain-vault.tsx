@@ -42,6 +42,7 @@ export function BrainVault({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteSlug, setDeleteSlug] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setBody(selected?.body ?? "");
@@ -118,14 +119,24 @@ export function BrainVault({
               className="flex-1 min-h-[280px] font-mono text-sm bg-[var(--panel)] border-[var(--line)]"
             />
             {canWrite ? (
-              <div className="flex justify-end">
+              <div className="flex flex-col items-end gap-2">
+                {saveError ? (
+                  <p className="text-sm text-destructive w-full" role="alert">
+                    {saveError}
+                  </p>
+                ) : null}
                 <Button
                   type="button"
                   disabled={pending}
                   onClick={() => {
                     startTransition(async () => {
-                      await saveBrainAction(selected.slug, body);
-                      router.refresh();
+                      const result = await saveBrainAction(selected.slug, body);
+                      if (result.ok) {
+                        setSaveError(null);
+                        router.refresh();
+                      } else {
+                        setSaveError(result.error);
+                      }
                     });
                   }}
                 >

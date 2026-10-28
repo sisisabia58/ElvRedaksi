@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import type { Settings } from "@/src/studio/settings";
 import {
   disconnectInstagramAction,
@@ -24,6 +24,8 @@ export function PengaturanForm({
   showLlmBanner: boolean;
 }) {
   const [pending, startTransition] = useTransition();
+  const [brandError, setBrandError] = useState<string | null>(null);
+  const [igError, setIgError] = useState<string | null>(null);
 
   return (
     <div className="p-6 md:p-8 space-y-8 max-w-2xl">
@@ -61,7 +63,12 @@ export function PengaturanForm({
               publicBaseUrl: String(formData.get("publicBaseUrl") ?? ""),
             };
             startTransition(async () => {
-              await saveSettingsAction(input);
+              const result = await saveSettingsAction(input);
+              if (result.ok) {
+                setBrandError(null);
+              } else {
+                setBrandError(result.error);
+              }
             });
           }}
         >
@@ -107,6 +114,11 @@ export function PengaturanForm({
             </select>
           </div>
           <Field label="URL publik" name="publicBaseUrl" defaultValue={settings.publicBaseUrl} />
+          {brandError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {brandError}
+            </p>
+          ) : null}
           <Button type="submit" disabled={pending}>
             Simpan
           </Button>
@@ -126,7 +138,12 @@ export function PengaturanForm({
               disabled={pending}
               onClick={() => {
                 startTransition(async () => {
-                  await disconnectInstagramAction();
+                  const result = await disconnectInstagramAction();
+                  if (!result.ok) {
+                    setIgError(result.error);
+                  } else {
+                    setIgError(null);
+                  }
                 });
               }}
             >
@@ -138,15 +155,27 @@ export function PengaturanForm({
             className="space-y-3"
             action={(formData) => {
               startTransition(async () => {
-                await saveInstagramConnectAction(
+                const result = await saveInstagramConnectAction(
                   String(formData.get("igUserId") ?? ""),
                   String(formData.get("accessToken") ?? ""),
+                  String(formData.get("igUsername") ?? ""),
                 );
+                if (result.ok) {
+                  setIgError(null);
+                } else {
+                  setIgError(result.error);
+                }
               });
             }}
           >
             <Field label="ID pengguna Instagram" name="igUserId" autoComplete="off" />
+            <Field label="Nama pengguna Instagram" name="igUsername" autoComplete="off" />
             <Field label="Token akses" name="accessToken" type="password" autoComplete="new-password" />
+            {igError ? (
+              <p className="text-sm text-destructive" role="alert">
+                {igError}
+              </p>
+            ) : null}
             <p className="text-xs text-[var(--muted)]">
               Token tidak ditampilkan lagi setelah disimpan. Posting memakai API resmi Meta.
             </p>

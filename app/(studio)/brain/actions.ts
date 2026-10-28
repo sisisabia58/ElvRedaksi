@@ -2,9 +2,22 @@
 
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
+import { ZodError } from "zod";
 import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { createNote, deleteNote, saveBrain } from "@/src/studio/brain";
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+function toActionResult(error: unknown): ActionResult {
+  if (error instanceof ZodError) {
+    return { ok: false, error: error.issues[0]?.message ?? "Data tidak valid" };
+  }
+  if (error instanceof Error) {
+    return { ok: false, error: error.message };
+  }
+  return { ok: false, error: "Terjadi kesalahan" };
+}
 
 async function requireUser() {
   const cookieStore = await cookies();
@@ -20,10 +33,15 @@ async function requireUser() {
   return { sql, user };
 }
 
-export async function saveBrainAction(slug: string, body: string) {
-  const { sql, user } = await requireUser();
-  await saveBrain(sql, user.role, { slug, body });
-  revalidatePath("/brain");
+export async function saveBrainAction(slug: string, body: string): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireUser();
+    await saveBrain(sql, user.role, { slug, body });
+    revalidatePath("/brain");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
 }
 
 export async function createNoteAction(title: string) {

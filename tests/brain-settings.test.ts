@@ -23,7 +23,7 @@ describe("brain and settings", () => {
     await seedDefaults(sql);
     await saveSettings(sql, "admin", {
       name: "Meja",
-      handle: "meja",
+      handle: "redaksi_meja",
       initial: "M",
       accent: "#d7ff3a",
       kicker: "Catatan",
@@ -41,6 +41,7 @@ describe("brain and settings", () => {
     });
     const settings = await getSettings(sql);
     expect(settings.passThreshold).toBe(75);
+    expect(settings.handle).toBe("redaksi_meja");
     expect(settings.igUsername).toBe("meja");
     expect(JSON.stringify(settings)).not.toContain("super-secret");
     await expect(saveSettings(sql, "social_media", settings)).rejects.toThrow(/forbidden/);
