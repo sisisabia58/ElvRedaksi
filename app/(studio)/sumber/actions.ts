@@ -10,7 +10,6 @@ import {
   addSource,
   deleteSource,
   setSourceEnabled,
-  type SourceRow,
 } from "@/src/studio/sources";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -76,4 +75,14 @@ export async function deleteSourceAction(id: string): Promise<ActionResult> {
   }
 }
 
-export type SourceView = SourceRow & { lastCheckedLabel: string };
+export type SourceView = {
+  id: string;
+  name: string;
+  url: string;
+  lang: "ID" | "EN";
+  enabled: boolean;
+  topicCount: number;
+  passCount7d: number;
+  lastError: string | null;
+  lastCheckedLabel: string;
+};

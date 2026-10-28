@@ -110,6 +110,11 @@ describe("scout", () => {
     expect(await isBlockedFetchTarget("http://[::ffff:127.0.0.1]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[::ffff:7f00:1]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[::ffff:169.254.169.254]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://0.1.2.3/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://100.64.0.1/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[2002:7f00:1::]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[64:ff9b::7f00:1]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://1.1.1.1/")).toBe(false);
 
     const sql = await createTestSql();

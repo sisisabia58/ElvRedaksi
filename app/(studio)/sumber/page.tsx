@@ -19,7 +19,14 @@ export default async function SumberPage() {
   const now = new Date();
   const sources = await listSources(sql);
   const views = sources.map((source) => ({
-    ...source,
+    id: source.id,
+    name: source.name,
+    url: source.url,
+    lang: source.lang,
+    enabled: source.enabled,
+    topicCount: source.topicCount,
+    passCount7d: source.passCount7d,
+    lastError: source.lastError,
     lastCheckedLabel: source.lastFetchedAt
       ? `dicek ${relativeId(source.lastFetchedAt, now)}`
       : "belum pernah",
