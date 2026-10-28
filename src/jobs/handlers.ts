@@ -524,8 +524,9 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
     source_name: string;
     handle: string;
     accent: string;
+    updated_at: Date;
   }>(
-    `select d.status, d.format, d.template, d.slides, d.focal_y,
+    `select d.status, d.format, d.template, d.slides, d.focal_y, d.updated_at,
             s.name as source_name, b.handle, b.accent
      from drafts d
      join topics t on t.id = d.topic_id
@@ -545,6 +546,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const selected = slidesForFormat(format, allSlides);
   const template = draft.template as SlideTemplate;
   const current = draft.status as DraftStatus;
+  const startedAt = draft.updated_at;
 
   await ctx.sql.rows(`delete from assets where draft_id = $1`, [draftId]);
 
@@ -581,15 +583,29 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
     }
   }
 
-  const nextStatus: DraftStatus = current === "drafted" ? "needs_review" : current;
+  let updated: { id: string }[];
   if (current === "drafted") {
-    assertTransition("worker", current, "needs_review");
+    assertTransition("worker", "drafted", "needs_review");
+    updated = await ctx.sql.rows<{ id: string }>(
+      `update drafts
+       set status = 'needs_review', text_dirty = false, error = null, updated_at = $1
+       where id = $2 and status = 'drafted' and updated_at = $3
+       returning id`,
+      [ctx.now, draftId, startedAt],
+    );
+  } else {
+    updated = await ctx.sql.rows<{ id: string }>(
+      `update drafts
+       set text_dirty = false, error = null, updated_at = $1
+       where id = $2 and status = $3 and updated_at = $4
+       returning id`,
+      [ctx.now, draftId, current, startedAt],
+    );
   }
 
-  await ctx.sql.rows(
-    `update drafts set status = $1, text_dirty = false, error = null, updated_at = $2 where id = $3`,
-    [nextStatus, ctx.now, draftId],
-  );
+  if (updated.length === 0) {
+    return;
+  }
 
   const coverHeadline = selected[0]?.headline ?? "draft";
   await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [

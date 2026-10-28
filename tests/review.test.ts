@@ -306,6 +306,30 @@ describe("review", () => {
     expect(draftIds).toEqual([scheduleId]);
   });
 
+  it("lists the cover headline without selecting photoDataUrl bytes", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    const photo = pngDataUrl(2 * 1024 * 1024);
+    await sql.rows(`update drafts set slides = $1::jsonb where id = $2`, [
+      JSON.stringify([
+        {
+          role: "cover",
+          kicker: "AI",
+          headline: "Judul cukup panjang",
+          body: "Isi.",
+          photoDataUrl: photo,
+        },
+        { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke artikel." },
+      ]),
+      DRAFT_ID,
+    ]);
+    const listed = await listDrafts(sql, "needs_review");
+    expect(listed[0]).toMatchObject({ headline: "Judul cukup panjang", slideCount: 2 });
+    expect(listDrafts.toString()).toContain("- 'photoDataUrl'");
+    const stored = await readDraft(sql, DRAFT_ID);
+    expect(stored.slides.find((slide) => slide.role === "cover")?.photoDataUrl).toBe(photo);
+  });
+
   it("persists focal only when the value changed", async () => {
     const sql = await createTestSql();
     await seedDraft(sql, false);

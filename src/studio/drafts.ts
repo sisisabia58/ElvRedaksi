@@ -163,7 +163,12 @@ export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCa
   const rows = await sql.rows<
     DraftRow & { updated_at: Date; asset_id: string | null }
   >(
-    `select d.id, d.status, d.format, d.template, d.slides, d.short_code, d.click_count,
+    `select d.id, d.status, d.format, d.template,
+            (
+              select coalesce(jsonb_agg((elem - 'photoDataUrl') order by ord), '[]'::jsonb)
+              from jsonb_array_elements(d.slides) with ordinality as s(elem, ord)
+            ) as slides,
+            d.short_code, d.click_count,
             d.updated_at, d.manual, t.score, t.sensitive, s.name as source_name, b.handle,
             (select a.id from assets a where a.draft_id = d.id order by a.slide_index limit 1) as asset_id
      from drafts d

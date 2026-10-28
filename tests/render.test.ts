@@ -12,6 +12,52 @@ const slides = [
   { role: "cta" as const, kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke artikel Contoh." },
 ];
 
+const DRAFT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+
+class RacingRasterizer extends FakeRasterizer {
+  constructor(private readonly during: () => Promise<void>) {
+    super();
+  }
+
+  async toPng(html: string): Promise<Uint8Array> {
+    await this.during();
+    return super.toPng(html);
+  }
+}
+
+async function seedDesignerDraft(status: "drafted" | "needs_review") {
+  const sql = await createTestSql();
+  await seedDefaults(sql);
+  await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+    "11111111-1111-1111-1111-111111111111",
+    "Contoh",
+    "https://news.example/feed",
+    "ID",
+  ]);
+  await sql.rows(
+    "insert into topics (id, source_id, title, url, state) values ($1,$2,$3,$4,'drafted')",
+    [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+      "11111111-1111-1111-1111-111111111111",
+      "Iklan",
+      "https://news.example/a",
+    ],
+  );
+  await sql.rows(
+    `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, text_dirty)
+     values ($1,$2,$3,'teaser_bio','serif',$4::jsonb,'cap',$5::jsonb,$6::jsonb,'abcde',false)`,
+    [
+      DRAFT_ID,
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+      status,
+      JSON.stringify(slides),
+      JSON.stringify(["iklan", "medsos", "sumber"]),
+      JSON.stringify(["Alt satu cukup", "Alt dua cukup"]),
+    ],
+  );
+  return sql;
+}
+
 describe("designer", () => {
   it("renders a 4:5 teaser without a remote image", () => {
     expect(slidesForFormat("teaser_bio", slides).map((s) => s.role)).toEqual(["cover", "cta"]);
@@ -149,5 +195,69 @@ describe("designer", () => {
     expect(captured[0]).toContain(coverPhoto);
     expect(captured[0]).toContain("center 72%");
     expect(captured[1]).not.toContain(coverPhoto);
+  });
+
+  it("keeps an approval that lands while the slide is rasterizing", async () => {
+    const sql = await seedDesignerDraft("needs_review");
+    await runDesigner({
+      sql,
+      payload: { draftId: DRAFT_ID },
+      manual: true,
+      now: new Date(),
+      rasterizer: new RacingRasterizer(async () => {
+        await sql.rows(
+          `update drafts set status = 'approved', updated_at = updated_at + interval '1 second' where id = $1`,
+          [DRAFT_ID],
+        );
+      }),
+    });
+    const status = await sql.rows<{ status: string; text_dirty: boolean }>(
+      "select status, text_dirty from drafts",
+    );
+    expect(status[0]).toMatchObject({ status: "approved", text_dirty: false });
+    const log = await sql.rows("select id from activity where agent = 'designer'");
+    expect(log).toHaveLength(0);
+  });
+
+  it("keeps text_dirty when a newer save lands while the slide is rasterizing", async () => {
+    const sql = await seedDesignerDraft("drafted");
+    await runDesigner({
+      sql,
+      payload: { draftId: DRAFT_ID },
+      manual: true,
+      now: new Date(),
+      rasterizer: new RacingRasterizer(async () => {
+        await sql.rows(
+          `update drafts set text_dirty = true, updated_at = updated_at + interval '1 second' where id = $1`,
+          [DRAFT_ID],
+        );
+      }),
+    });
+    const status = await sql.rows<{ status: string; text_dirty: boolean }>(
+      "select status, text_dirty from drafts",
+    );
+    expect(status[0]).toMatchObject({ status: "drafted", text_dirty: true });
+    const log = await sql.rows("select id from activity where agent = 'designer'");
+    expect(log).toHaveLength(0);
+  });
+
+  it("keeps text_dirty when a newer save lands during a re-render", async () => {
+    const sql = await seedDesignerDraft("needs_review");
+    await runDesigner({
+      sql,
+      payload: { draftId: DRAFT_ID },
+      manual: true,
+      now: new Date(),
+      rasterizer: new RacingRasterizer(async () => {
+        await sql.rows(
+          `update drafts set text_dirty = true, updated_at = updated_at + interval '1 second' where id = $1`,
+          [DRAFT_ID],
+        );
+      }),
+    });
+    const status = await sql.rows<{ status: string; text_dirty: boolean }>(
+      "select status, text_dirty from drafts",
+    );
+    expect(status[0]).toMatchObject({ status: "needs_review", text_dirty: true });
   });
 });
