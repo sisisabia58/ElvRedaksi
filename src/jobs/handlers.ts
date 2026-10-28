@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SCOUT_INTERVAL_MS } from "../domain/constants";
-import { assertPublicFetchUrl, fetchPublicText } from "../rss/fetch-guard";
+import { fetchPublicText } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
 import { enqueue, type JobCtx } from "./runner";
@@ -28,7 +28,6 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 
   for (const source of sources) {
     try {
-      await assertPublicFetchUrl(source.url);
       const xml = await ctx.fetchFeed(source.url);
       const items = parseFeed(xml);
 
@@ -43,7 +42,6 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 
         let excerpt = "";
         try {
-          await assertPublicFetchUrl(item.url);
           const html = await ctx.fetchPage(item.url);
           excerpt = excerptFromHtml(html);
         } catch {

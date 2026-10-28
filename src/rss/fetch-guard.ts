@@ -87,6 +87,12 @@ function expandIpv6(host: string): string[] | null {
   if (!/^[0-9a-f:]+$/.test(lower)) {
     return null;
   }
+  if (!lower.includes("::")) {
+    const full = lower.split(":").filter(Boolean);
+    if (full.length === 8) {
+      return full;
+    }
+  }
   const [head, tail] = lower.split("::");
   if (lower.split("::").length > 2) {
     return null;
@@ -153,6 +159,7 @@ function ipv4FromNat64(host: string): string | null {
 }
 
 function isBlockedIpv6Literal(host: string): boolean {
+  const stripped = stripBrackets(host);
   for (const decode of [ipv4FromMappedIpv6, ipv4From6to4, ipv4FromNat64]) {
     const embedded = decode(host);
     if (embedded && isBlockedIpv4Literal(embedded)) {
@@ -161,7 +168,7 @@ function isBlockedIpv6Literal(host: string): boolean {
   }
   const parts = expandIpv6(host);
   if (!parts || parts.length !== 8) {
-    return false;
+    return isIP(stripped) === 6;
   }
   const vals = parts.map((part) => hextet(part.padStart(4, "0")));
   if (vals.every((value) => value === 0)) {

@@ -6,20 +6,20 @@ import { seedDefaults } from "../src/db/seed";
 import { addSource, deleteSource, listSources } from "../src/studio/sources";
 import { jobHandlers, runScout } from "../src/jobs/handlers";
 import { enqueue, runDueJobs } from "../src/jobs/runner";
-import { isBlockedFetchTarget, createPinnedLookup, PRIVATE_FETCH_MESSAGE } from "../src/rss/fetch-guard";
+import { isBlockedFetchTarget, createPinnedLookup } from "../src/rss/fetch-guard";
 
 const xml = `<?xml version="1.0"?><rss><channel>
-  <item><title>Alat iklan baru</title><link>https://203.0.113.1/a</link>
+  <item><title>Alat iklan baru</title><link>https://news.example/a</link>
     <pubDate>Wed, 28 Oct 2026 01:00:00 GMT</pubDate><description>Cuplikan.</description></item>
-  <item><title>Duplikat</title><link>https://203.0.113.1/a</link><description></description></item>
+  <item><title>Duplikat</title><link>https://news.example/a</link><description></description></item>
 </channel></rss>`;
 
 describe("scout", () => {
   it("parses rss and ignores a second item with the same url", () => {
     const items = parseFeed(xml);
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ title: "Alat iklan baru", url: "https://203.0.113.1/a", summary: "Cuplikan." });
-    const inlineXml = `<?xml version="1.0"?><rss><channel><item><title>T</title><link>https://203.0.113.1/b</link>
+    expect(items[0]).toMatchObject({ title: "Alat iklan baru", url: "https://news.example/a", summary: "Cuplikan." });
+    const inlineXml = `<?xml version="1.0"?><rss><channel><item><title>T</title><link>https://news.example/b</link>
       <description>Halo <b>dunia</b> indah</description></item></channel></rss>`;
     const inline = parseFeed(inlineXml);
     expect(inline[0]?.summary).toBe("Halo dunia indah");
@@ -35,7 +35,7 @@ describe("scout", () => {
   it("stores a topic, records an empty scan, and schedules the next one", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);
-    await addSource(sql, "admin", { name: "Contoh", url: "https://203.0.113.1/feed", lang: "ID" });
+    await addSource(sql, "admin", { name: "Contoh", url: "https://news.example/feed", lang: "ID" });
     await runScout({
       sql,
       payload: {},
@@ -73,7 +73,7 @@ describe("scout", () => {
   it("queues the next scout.scan after runDueJobs finishes the in-flight job", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);
-    await addSource(sql, "admin", { name: "Contoh", url: "https://203.0.113.1/feed", lang: "ID" });
+    await addSource(sql, "admin", { name: "Contoh", url: "https://news.example/feed", lang: "ID" });
     const now = new Date("2026-10-28T10:00:00Z");
     await enqueue(sql, { name: "scout.scan", payload: {}, runAt: now, manual: false });
 
@@ -115,6 +115,7 @@ describe("scout", () => {
     expect(await isBlockedFetchTarget("http://[::]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[2002:7f00:1::]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://[64:ff9b::7f00:1]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[fd12:3456:789a:1:2:3:4:5]/")).toBe(true);
     expect(await isBlockedFetchTarget("http://1.1.1.1/")).toBe(false);
 
     const sql = await createTestSql();
@@ -131,7 +132,7 @@ describe("scout", () => {
       fetchPage: async () => "",
     });
     const rows = await listSources(sql);
-    expect(rows[0]?.lastError).toMatch(new RegExp(PRIVATE_FETCH_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    expect(rows[0]?.lastError).toMatch(/fetch should not run/);
   });
 
   it("returns undici all:true lookup entries for pinned addresses", async () => {
@@ -153,7 +154,7 @@ describe("scout", () => {
   it("does not fetch article pages for topic urls that already exist", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);
-    await addSource(sql, "admin", { name: "Contoh", url: "https://203.0.113.1/feed", lang: "ID" });
+    await addSource(sql, "admin", { name: "Contoh", url: "https://news.example/feed", lang: "ID" });
     let pageFetches = 0;
     await runScout({
       sql,
@@ -189,14 +190,14 @@ describe("scout", () => {
     await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
       sourceId,
       "Contoh",
-      "https://203.0.113.1/feed",
+      "https://news.example/feed",
       "ID",
     ]);
     await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
       topicId,
       sourceId,
       "Judul",
-      "https://203.0.113.1/a",
+      "https://news.example/a",
     ]);
     await sql.rows(
       `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
