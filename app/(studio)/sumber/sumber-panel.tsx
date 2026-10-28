@@ -28,6 +28,7 @@ export function SumberPanel({ sources }: { sources: SourceView[] }) {
   const [url, setUrl] = useState("");
   const [lang, setLang] = useState<"ID" | "EN">("ID");
   const [formError, setFormError] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -47,8 +48,13 @@ export function SumberPanel({ sources }: { sources: SourceView[] }) {
   }
 
   function toggleEnabled(id: string, enabled: boolean) {
+    setToggleError(null);
     startTransition(async () => {
-      await setSourceEnabledAction(id, enabled);
+      const result = await setSourceEnabledAction(id, enabled);
+      if (!result.ok) {
+        setToggleError(result.error);
+        return;
+      }
       router.refresh();
     });
   }
@@ -120,6 +126,7 @@ export function SumberPanel({ sources }: { sources: SourceView[] }) {
           </div>
         </div>
         {formError ? <p className="text-sm text-[var(--bad)]">{formError}</p> : null}
+        {toggleError ? <p className="text-sm text-[var(--bad)]">{toggleError}</p> : null}
         <Button type="submit" disabled={pending}>
           Tambah
         </Button>

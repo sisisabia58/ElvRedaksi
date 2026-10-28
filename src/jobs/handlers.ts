@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SCOUT_INTERVAL_MS } from "../domain/constants";
+import { assertPublicFetchUrl } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
 import { enqueue, type JobCtx } from "./runner";
@@ -9,9 +10,11 @@ export type ScoutCtx = JobCtx & {
   fetchPage: (url: string) => Promise<string>;
 };
 
-async function hasUnfinishedScoutScan(sql: JobCtx["sql"]): Promise<boolean> {
+async function hasQueuedScoutScan(sql: JobCtx["sql"]): Promise<boolean> {
   const rows = await sql.rows<{ id: string }>(
-    `select id from jobs where name = 'scout.scan' and finished_at is null limit 1`,
+    `select id from jobs
+     where name = 'scout.scan' and finished_at is null and locked_at is null
+     limit 1`,
   );
   return rows.length > 0;
 }
@@ -25,12 +28,14 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 
   for (const source of sources) {
     try {
+      assertPublicFetchUrl(source.url);
       const xml = await ctx.fetchFeed(source.url);
       const items = parseFeed(xml);
 
       for (const item of items) {
         let excerpt = "";
         try {
+          assertPublicFetchUrl(item.url);
           const html = await ctx.fetchPage(item.url);
           excerpt = excerptFromHtml(html);
         } catch {
@@ -81,7 +86,7 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
     activityMessage,
   ]);
 
-  if (!(await hasUnfinishedScoutScan(ctx.sql))) {
+  if (!(await hasQueuedScoutScan(ctx.sql))) {
     await enqueue(ctx.sql, {
       name: "scout.scan",
       payload: {},
@@ -92,6 +97,7 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<string> {
+  assertPublicFetchUrl(url);
   const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
