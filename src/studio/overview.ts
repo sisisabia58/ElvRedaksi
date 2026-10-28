@@ -46,3 +46,61 @@ export async function funnelCounts(sql: Sql, now: Date = new Date()): Promise<Fu
     postedThisWeek: Number(row?.posted_this_week ?? 0),
   };
 }
+
+export type AgentId = "scout" | "analis" | "copywriter" | "designer";
+
+export type AgentCard = {
+  agent: AgentId;
+  role: string;
+  lastAt: Date | null;
+  running: boolean;
+};
+
+const AGENTS: { agent: AgentId; role: string; jobPrefix: string }[] = [
+  { agent: "scout", role: "Pemantau topik", jobPrefix: "scout." },
+  // Activity and the card id say "analis"; the job name is analyst.score.
+  { agent: "analis", role: "Cek potensi viral", jobPrefix: "analyst." },
+  { agent: "copywriter", role: "Headline & caption", jobPrefix: "copywriter." },
+  { agent: "designer", role: "Render gambar", jobPrefix: "designer." },
+];
+
+export async function agentCards(sql: Sql, now: Date): Promise<AgentCard[]> {
+  const [jobs, activity] = await Promise.all([
+    sql.rows<{ name: string }>(
+      "select name from jobs where locked_at is not null and finished_at is null",
+    ),
+    sql.rows<{ agent: string; last_at: Date | string | null }>(
+      `select agent, max(created_at) as last_at
+       from activity
+       group by agent`,
+    ),
+  ]);
+  const lastByAgent = new Map(
+    activity.flatMap((row) => {
+      if (row.last_at == null) return [];
+      const at = new Date(row.last_at);
+      const lastAt = at.getTime() > now.getTime() ? now : at;
+      return [[row.agent, lastAt] as const];
+    }),
+  );
+  return AGENTS.map((spec) => ({
+    agent: spec.agent,
+    role: spec.role,
+    lastAt: lastByAgent.get(spec.agent) ?? null,
+    running: jobs.some((job) => job.name.startsWith(spec.jobPrefix)),
+  }));
+}
+
+export async function recentActivity(sql: Sql): Promise<{ agent: string; message: string; at: Date }[]> {
+  const rows = await sql.rows<{ agent: string; message: string; created_at: Date | string }>(
+    `select agent, message, created_at
+     from activity
+     order by created_at desc
+     limit 8`,
+  );
+  return rows.map((row) => ({
+    agent: row.agent,
+    message: row.message,
+    at: new Date(row.created_at),
+  }));
+}
