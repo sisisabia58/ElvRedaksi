@@ -6,7 +6,7 @@ import { seedDefaults } from "../src/db/seed";
 import { addSource, listSources } from "../src/studio/sources";
 import { jobHandlers, runScout } from "../src/jobs/handlers";
 import { enqueue, runDueJobs } from "../src/jobs/runner";
-import { isBlockedFetchTarget, PRIVATE_FETCH_MESSAGE } from "../src/rss/fetch-guard";
+import { isBlockedFetchTarget, createPinnedLookup, PRIVATE_FETCH_MESSAGE } from "../src/rss/fetch-guard";
 
 const xml = `<?xml version="1.0"?><rss><channel>
   <item><title>Alat iklan baru</title><link>https://203.0.113.1/a</link>
@@ -132,5 +132,21 @@ describe("scout", () => {
     });
     const rows = await listSources(sql);
     expect(rows[0]?.lastError).toMatch(new RegExp(PRIVATE_FETCH_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  it("returns undici all:true lookup entries for pinned addresses", async () => {
+    const pinned = "203.0.113.9";
+    const lookup = createPinnedLookup("feed.example.com", [pinned]);
+    const results = await new Promise<{ address: string; family: number }[]>((resolve, reject) => {
+      lookup("feed.example.com", { all: true }, (err, addresses) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(addresses as { address: string; family: number }[]);
+      });
+    });
+    expect(results[0]?.address).toBe(pinned);
+    expect(results[0]?.family).toBe(4);
   });
 });

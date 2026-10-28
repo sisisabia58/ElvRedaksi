@@ -263,17 +263,29 @@ export async function assertPublicFetchUrl(url: string): Promise<void> {
   }
 }
 
-function createPinnedLookup(hostname: string, addresses: string[]) {
+export function createPinnedLookup(hostname: string, addresses: string[]) {
   const expected = stripBrackets(hostname).toLowerCase();
   let cursor = 0;
   return (
     lookupHost: string,
-    _options: unknown,
-    callback: (err: Error | null, address: string, family: number) => void,
+    options: { all?: boolean },
+    callback: (
+      err: Error | null,
+      address?: string | { address: string; family: number }[],
+      family?: number,
+    ) => void,
   ) => {
     const host = stripBrackets(lookupHost).toLowerCase();
     if (host !== expected) {
-      callback(new Error("unexpected host"), "", 0);
+      callback(new Error("unexpected host"));
+      return;
+    }
+    const entries = addresses.map((address) => ({
+      address,
+      family: isIP(address) === 6 ? 6 : 4,
+    }));
+    if (options?.all) {
+      callback(null, entries);
       return;
     }
     const address = addresses[cursor % addresses.length];
