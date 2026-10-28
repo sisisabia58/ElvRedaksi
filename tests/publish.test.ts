@@ -42,6 +42,11 @@ describe("publisher", () => {
       }),
     ).rejects.toThrow(/Kuota posting/);
     expect(calls.some((url) => url.includes("/media_publish"))).toBe(false);
+    const limit = calls.find((url) => url.includes("content_publishing_limit"));
+    expect(limit).toBeTruthy();
+    const fields = new URL(limit!).searchParams.get("fields") ?? "";
+    expect(fields.split(",")).toEqual(expect.arrayContaining(["quota_usage", "config"]));
+    expect(new URL(limit!).searchParams.get("access_token")).toBe("token");
   });
 
   it("publishes a scheduled draft through the fake adapter", async () => {

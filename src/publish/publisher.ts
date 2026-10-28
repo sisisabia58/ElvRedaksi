@@ -118,7 +118,9 @@ export class MetaPublisher implements Publisher {
   }
 
   private async assertQuota(input: PublishInput): Promise<void> {
-    const url = graphUrl(`${input.igUserId}/content_publishing_limit`, input.accessToken);
+    const url = graphUrl(`${input.igUserId}/content_publishing_limit`, input.accessToken, {
+      fields: "quota_usage,config",
+    });
     const res = await this.fetchImpl(url);
     const body = await readBody(res);
     const usage = body?.data?.[0]?.quota_usage;
