@@ -174,6 +174,109 @@ describe("copywriter", () => {
     expect(log.some((row) => row.message.startsWith("Draft siap:"))).toBe(false);
   });
 
+  it("does not call the model when a rewrite draft is already posting", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const topicId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, state, score) values ($1,$2,$3,$4,'drafted',80)",
+      [topicId, "11111111-1111-1111-1111-111111111111", "Iklan baru", "https://news.example/a"],
+    );
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
+       values ($1,$2,'posting','teaser_bio','serif',$3::jsonb,'Caption lama dari Contoh.',$4::jsonb,$5::jsonb,'postn')`,
+      [
+        draftId,
+        topicId,
+        JSON.stringify([
+          { role: "cover", kicker: "Lama", headline: "Judul yang sudah disetujui", body: "Lama." },
+          { role: "point", kicker: "Fakta", headline: "Poin lama yang cukup", body: "Detail." },
+          { role: "point", kicker: "Dampak", headline: "Poin dua yang cukup", body: "Detail." },
+          { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke Contoh." },
+        ]),
+        JSON.stringify(["lama"]),
+        JSON.stringify(["Alt lama satu", "Alt lama dua"]),
+      ],
+    );
+    await expect(
+      runCopywriter({
+        sql,
+        payload: { topicId, rewrite: true },
+        manual: true,
+        now: new Date("2026-10-28T02:00:00Z"),
+        llm: {
+          complete: async () => {
+            throw new Error("complete must not run");
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
+    const topic = await sql.rows<{ state: string }>("select state from topics where id = $1", [topicId]);
+    expect(topic[0]?.state).toBe("drafted");
+    const spend = await sql.rows("select id from llm_spend");
+    expect(spend).toHaveLength(0);
+    const renderJobs = await sql.rows("select id from jobs where name = 'designer.render'");
+    expect(renderJobs).toHaveLength(0);
+  });
+
+  it("does not fail the topic when a rewrite draft becomes posting during a bad parse", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const topicId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, state, score) values ($1,$2,$3,$4,'drafted',80)",
+      [topicId, "11111111-1111-1111-1111-111111111111", "Iklan baru", "https://news.example/a"],
+    );
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
+       values ($1,$2,'needs_review','teaser_bio','serif',$3::jsonb,'Caption lama dari Contoh.',$4::jsonb,$5::jsonb,'race1')`,
+      [
+        draftId,
+        topicId,
+        JSON.stringify([
+          { role: "cover", kicker: "Lama", headline: "Judul yang sudah disetujui", body: "Lama." },
+          { role: "point", kicker: "Fakta", headline: "Poin lama yang cukup", body: "Detail." },
+          { role: "point", kicker: "Dampak", headline: "Poin dua yang cukup", body: "Detail." },
+          { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke Contoh." },
+        ]),
+        JSON.stringify(["lama"]),
+        JSON.stringify(["Alt lama satu", "Alt lama dua"]),
+      ],
+    );
+    await runCopywriter({
+      sql,
+      payload: { topicId, rewrite: true },
+      manual: true,
+      now: new Date("2026-10-28T02:00:00Z"),
+      llm: {
+        complete: async () => {
+          await sql.rows("update drafts set status = 'posting' where id = $1", [draftId]);
+          return { text: "bukan json", costUsd: 0.01, model: "test" };
+        },
+      },
+    });
+    const topic = await sql.rows<{ state: string }>("select state from topics where id = $1", [topicId]);
+    expect(topic[0]?.state).toBe("drafted");
+    const activity = await sql.rows<{ message: string }>(
+      "select message from activity where agent = 'copywriter'",
+    );
+    expect(activity.some((row) => row.message.startsWith("Gagal menulis"))).toBe(false);
+  });
+
   it("keeps a valid cover photo data url when a rewrite replaces the slides", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);

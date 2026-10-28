@@ -348,6 +348,14 @@ function slidesKeepingCoverPhoto(nextSlides: Slide[], stored: unknown): Slide[] 
   }
 }
 
+async function topicDraftIsPosting(sql: JobCtx["sql"], topicId: string): Promise<boolean> {
+  const rows = await sql.rows<{ id: string }>(
+    `select id from drafts where topic_id = $1 and status = 'posting' limit 1`,
+    [topicId],
+  );
+  return rows.length > 0;
+}
+
 export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   const llm = ctx.llm ?? createLlm();
   const topicId = ctx.payload.topicId;
@@ -381,6 +389,11 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
     return;
   }
 
+  const rewrite = ctx.payload.rewrite === true;
+  if (rewrite && (await topicDraftIsPosting(ctx.sql, topicId))) {
+    return;
+  }
+
   const brain = await loadBrain(ctx.sql);
   const user = [
     `Judul: ${topic.title}`,
@@ -406,6 +419,9 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   try {
     copy = parseCopy(result.text, topic.source_name);
   } catch (error) {
+    if (rewrite && (await topicDraftIsPosting(ctx.sql, topicId))) {
+      return;
+    }
     const message = error instanceof Error ? error.message : "naskah tidak valid";
     await ctx.sql.rows(`update topics set state = 'failed', error = $1 where id = $2`, [message, topicId]);
     await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
@@ -416,7 +432,6 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
     return;
   }
 
-  const rewrite = ctx.payload.rewrite === true;
   const existingDrafts = await ctx.sql.rows<{ id: string }>(
     "select id from drafts where topic_id = $1 limit 1",
     [topicId],
