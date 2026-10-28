@@ -2,7 +2,7 @@ import type { Sql } from "../db/client";
 import { TIME_ZONE } from "../domain/constants";
 import { deltaPct, engagementRate } from "../domain/metrics";
 
-export type DailyPoint = { date: string; views: number; reach: number; followers: number };
+export type DailyPoint = { date: string; views: number; reach: number; followers: number | null };
 
 export type InsightPostInput = {
   igMediaId: string;
@@ -84,6 +84,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function asFollowers(value: unknown): number | null | undefined {
+  if (value == null) return null;
+  const parsed = asCount(value);
+  return parsed == null ? undefined : parsed;
+}
+
 function asCount(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
@@ -145,8 +151,8 @@ function asDaily(raw: unknown): DailyPoint[] {
     if (!isRecord(item) || typeof item.date !== "string") continue;
     const views = asCount(item.views);
     const reach = asCount(item.reach);
-    const followers = asCount(item.followers);
-    if (views == null || reach == null || followers == null) continue;
+    const followers = asFollowers(item.followers);
+    if (views == null || reach == null || followers === undefined) continue;
     points.push({ date: item.date, views, reach, followers });
   }
   return points;
@@ -261,6 +267,8 @@ export async function analyticsView(
   const previousDaily = sliceDaily(daily, previousStart, previousEnd);
   const currentLast = currentDaily[currentDaily.length - 1];
   const previousLast = previousDaily[previousDaily.length - 1];
+  const currentFollowers = currentLast?.followers ?? null;
+  const previousFollowers = previousLast?.followers ?? null;
 
   const previousRows = await sql.rows<{
     interactions: number;
@@ -287,7 +295,8 @@ export async function analyticsView(
     empty: false,
     followers: {
       value: followers,
-      delta: currentLast && previousLast ? currentLast.followers - previousLast.followers : null,
+      delta:
+        currentFollowers == null || previousFollowers == null ? null : currentFollowers - previousFollowers,
       deltaKind: "absolute",
     },
     views: {

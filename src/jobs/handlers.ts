@@ -20,7 +20,7 @@ import { createLlm, type LlmProvider } from "../llm/provider";
 import { fetchPublicText } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
-import { normalizeInsights } from "../studio/analytics";
+import { normalizeInsights, type DailyPoint } from "../studio/analytics";
 import { validateCoverPhotoDataUrl, withLockedDraftEdit } from "../studio/drafts";
 import { enqueue, type JobCtx } from "./runner";
 
@@ -944,7 +944,12 @@ function jakartaDate(instant: Date): string {
   }).format(instant);
 }
 
-function readDaily(body: unknown, followers: number): { date: string; views: number; reach: number; followers: number }[] {
+function readDaily(
+  body: unknown,
+  followers: number,
+  syncDate: string,
+  priorFollowers: ReadonlyMap<string, number>,
+): DailyPoint[] {
   if (!isRecord(body) || !Array.isArray(body.data)) return [];
   const byDate = new Map<string, { views: number; reach: number }>();
   for (const metric of body.data) {
@@ -956,7 +961,8 @@ function readDaily(body: unknown, followers: number): { date: string; views: num
       if (typeof point.value !== "number" || !Number.isFinite(point.value)) continue;
       const at = new Date(point.end_time);
       if (Number.isNaN(at.getTime())) continue;
-      const date = jakartaDate(at);
+      // period=day end_time is the exclusive midnight that ends that day.
+      const date = jakartaDate(new Date(at.getTime() - 1));
       const row = byDate.get(date) ?? { views: 0, reach: 0 };
       row[metric.name] += point.value;
       byDate.set(date, row);
@@ -964,7 +970,44 @@ function readDaily(body: unknown, followers: number): { date: string; views: num
   }
   return [...byDate.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, row]) => ({ date, views: row.views, reach: row.reach, followers }));
+    .map(([date, row]) => ({
+      date,
+      views: row.views,
+      reach: row.reach,
+      followers: date === syncDate ? followers : (priorFollowers.get(date) ?? null),
+    }));
+}
+
+function storedFollowerPoints(raw: unknown): { date: string; followers: number }[] {
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const points = [];
+  for (const item of parsed) {
+    if (!isRecord(item) || typeof item.date !== "string") continue;
+    if (typeof item.followers !== "number" || !Number.isFinite(item.followers)) continue;
+    points.push({ date: item.date, followers: item.followers });
+  }
+  return points;
+}
+
+async function measuredFollowers(sql: JobCtx["sql"]): Promise<Map<string, number>> {
+  const rows = await sql.rows<{ daily: unknown }>(
+    `select daily from insight_snapshots order by taken_at desc`,
+  );
+  const measured = new Map<string, number>();
+  for (const row of rows) {
+    for (const point of storedFollowerPoints(row.daily)) {
+      if (!measured.has(point.date)) measured.set(point.date, point.followers);
+    }
+  }
+  return measured;
 }
 
 function readCount(value: unknown): number {
@@ -1081,7 +1124,7 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
   const followers = readFollowers(followersBody);
   const normalized = normalizeInsights({
     followers,
-    daily: readDaily(insightsBody, followers),
+    daily: readDaily(insightsBody, followers, jakartaDate(ctx.now), await measuredFollowers(ctx.sql)),
     accountsEngaged: null,
     posts: readPosts(mediaBody),
   });

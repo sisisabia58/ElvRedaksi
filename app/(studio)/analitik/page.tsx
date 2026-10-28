@@ -177,7 +177,9 @@ export default async function AnalitikPage({
                       <td className="py-2 pr-3 text-[var(--ink)]">{formatDay(point.date)}</td>
                       <td className="py-2 pr-3 tabular-nums">{formatCount(point.views)}</td>
                       <td className="py-2 pr-3 tabular-nums">{formatCount(point.reach)}</td>
-                      <td className="py-2 tabular-nums">{formatCount(point.followers)}</td>
+                      <td className="py-2 tabular-nums">
+                        {point.followers == null ? "–" : formatCount(point.followers)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -288,16 +290,17 @@ function ViewsBars({ daily }: { daily: DailyPoint[] }) {
 }
 
 function FollowersLine({ daily }: { daily: DailyPoint[] }) {
-  if (daily.length === 0) return null;
+  const measured = daily.filter((point): point is DailyPoint & { followers: number } => point.followers != null);
+  if (measured.length === 0) return null;
   const width = 640;
   const height = 160;
   const pad = 8;
-  const values = daily.map((point) => point.followers);
+  const values = measured.map((point) => point.followers);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min;
-  const coords = daily.map((point, index) => {
-    const x = daily.length === 1 ? width / 2 : (index / (daily.length - 1)) * (width - pad * 2) + pad;
+  const coords = measured.map((point, index) => {
+    const x = measured.length === 1 ? width / 2 : (index / (measured.length - 1)) * (width - pad * 2) + pad;
     const y = span === 0 ? height / 2 : height - pad - ((point.followers - min) / span) * (height - pad * 2);
     return { x, y };
   });

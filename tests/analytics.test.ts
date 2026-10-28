@@ -82,4 +82,154 @@ describe("analytics", () => {
     expect(view.followers.deltaKind).toBe("absolute");
     expect(view.views.deltaKind).toBe("percent");
   });
+
+  it("dates a day by the period it covers and does not copy today's followers backward", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-28T02:00:00Z");
+    await sql.rows(
+      `insert into ig_connection (id, ig_user_id, access_token, username)
+       values (1, $1, $2, $3)
+       on conflict (id) do update set ig_user_id = $1, access_token = $2, username = $3`,
+      ["1789", "token", "redaksi"],
+    );
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/insights")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                name: "views",
+                period: "day",
+                values: [
+                  { value: 40, end_time: "2026-10-28T00:00:00+07:00" },
+                  { value: 55, end_time: "2026-10-29T00:00:00+07:00" },
+                ],
+              },
+              {
+                name: "reach",
+                period: "day",
+                values: [
+                  { value: 30, end_time: "2026-10-28T00:00:00+07:00" },
+                  { value: 33, end_time: "2026-10-29T00:00:00+07:00" },
+                ],
+              },
+            ],
+          }),
+        );
+      }
+      if (url.includes("/media")) return new Response(JSON.stringify({ data: [] }));
+      return new Response(JSON.stringify({ followers_count: 1280, id: "1789" }));
+    };
+    await runInsights({ sql, payload: {}, manual: true, now, fetchImpl });
+    const snapshots = await sql.rows<{ followers: number; daily: unknown }>(
+      "select followers, daily from insight_snapshots",
+    );
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].followers).toBe(1280);
+    expect(asDailyRows(snapshots[0].daily)).toEqual([
+      { date: "2026-10-27", views: 40, reach: 30, followers: null },
+      { date: "2026-10-28", views: 55, reach: 33, followers: 1280 },
+    ]);
+  });
+
+  it("copies a previously measured follower count and still stamps today with the live count", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-28T02:00:00Z");
+    await sql.rows(
+      `insert into ig_connection (id, ig_user_id, access_token, username)
+       values (1, $1, $2, $3)
+       on conflict (id) do update set ig_user_id = $1, access_token = $2, username = $3`,
+      ["1789", "token", "redaksi"],
+    );
+    await sql.rows(
+      `insert into insight_snapshots (id, taken_at, followers, views, reach, interactions, accounts_engaged, daily)
+       values ($1, $2, 1100, 1, 1, 0, null, $3::jsonb)`,
+      [
+        "dddddddd-dddd-dddd-dddd-ddddddddddd2",
+        "2026-10-27T02:00:00Z",
+        JSON.stringify([
+          { date: "2026-10-27", views: 1, reach: 1, followers: 1100 },
+          { date: "2026-10-28", views: 1, reach: 1, followers: 999 },
+        ]),
+      ],
+    );
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/insights")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                name: "views",
+                period: "day",
+                values: [
+                  { value: 10, end_time: "2026-10-27T00:00:00+07:00" },
+                  { value: 40, end_time: "2026-10-28T00:00:00+07:00" },
+                  { value: 55, end_time: "2026-10-29T00:00:00+07:00" },
+                ],
+              },
+              {
+                name: "reach",
+                period: "day",
+                values: [
+                  { value: 8, end_time: "2026-10-27T00:00:00+07:00" },
+                  { value: 30, end_time: "2026-10-28T00:00:00+07:00" },
+                  { value: 33, end_time: "2026-10-29T00:00:00+07:00" },
+                ],
+              },
+            ],
+          }),
+        );
+      }
+      if (url.includes("/media")) return new Response(JSON.stringify({ data: [] }));
+      return new Response(JSON.stringify({ followers_count: 1280, id: "1789" }));
+    };
+    await runInsights({ sql, payload: {}, manual: true, now, fetchImpl });
+    const snapshots = await sql.rows<{ taken_at: string | Date; daily: unknown }>(
+      "select taken_at, daily from insight_snapshots order by taken_at desc",
+    );
+    expect(asDailyRows(snapshots[0].daily)).toEqual([
+      { date: "2026-10-26", views: 10, reach: 8, followers: null },
+      { date: "2026-10-27", views: 40, reach: 30, followers: 1100 },
+      { date: "2026-10-28", views: 55, reach: 33, followers: 1280 },
+    ]);
+  });
+
+  it("leaves the follower delta null when the window's last point has no follower count", async () => {
+    const sql = await createTestSql();
+    const daily = [
+      { date: "2026-09-30", views: 12, reach: 9, followers: 800 },
+      { date: "2026-10-20", views: 20, reach: 15, followers: 900 },
+      { date: "2026-10-28", views: 22, reach: 16, followers: null },
+    ];
+    await sql.rows(
+      `insert into insight_snapshots (id, taken_at, followers, views, reach, interactions, accounts_engaged, daily)
+       values ($1,$2,900,54,40,0,null,$3::jsonb)`,
+      ["dddddddd-dddd-dddd-dddd-ddddddddddd3", "2026-10-28T00:00:00Z", JSON.stringify(daily)],
+    );
+    const view = await analyticsView(sql, 28, new Date("2026-10-28T02:00:00Z"));
+    expect(view.followers.deltaKind).toBe("absolute");
+    expect(view.followers.delta).toBeNull();
+    expect(view.followers.value).toBe(900);
+    expect(view.daily).toEqual([
+      { date: "2026-10-20", views: 20, reach: 15, followers: 900 },
+      { date: "2026-10-28", views: 22, reach: 16, followers: null },
+    ]);
+  });
 });
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+function asDailyRows(raw: unknown): { date: string; views: number; reach: number; followers: number | null }[] {
+  const parsed = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((item) => {
+    const row = item as { date: string; views: number; reach: number; followers: number | null };
+    return { date: row.date, views: row.views, reach: row.reach, followers: row.followers };
+  });
+}
