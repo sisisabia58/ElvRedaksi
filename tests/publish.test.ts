@@ -1,14 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { FakePublisher, MetaPublisher } from "../src/publish/publisher";
+import { pngToJpeg } from "../src/publish/jpeg";
 import { createTestSql } from "../src/db/client";
 import { runPublisher } from "../src/jobs/handlers";
 import { weekItems } from "../src/studio/calendar";
+
+const ONE_BY_ONE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 describe("publisher", () => {
+  it("transcodes a stored PNG into a JPEG Instagram can fetch", async () => {
+    const jpeg = await pngToJpeg(ONE_BY_ONE_PNG);
+    expect([...jpeg.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+  });
+
   it("stops when the Instagram quota is used up", async () => {
     const calls: string[] = [];
     const fetchImpl: typeof fetch = async (input) => {
