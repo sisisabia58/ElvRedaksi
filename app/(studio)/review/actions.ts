@@ -8,10 +8,12 @@ import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import type { Slide } from "@/src/agents/copywriter";
 import {
   approveDraft,
+  approveDraftInTx,
   deleteDraft,
   markPostedManually,
   postDraftNow,
   rejectDraft,
+  rejectDraftInTx,
   retryFailed,
   saveCoverPhoto,
   saveDraftText,
@@ -131,7 +133,7 @@ export async function bulkApproveAction(ids: string[]): Promise<ActionResult> {
     const { sql, role } = await sessionUser();
     await sql.tx(async (tx) => {
       for (const id of ids) {
-        await approveDraft(tx, role, id);
+        await approveDraftInTx(tx, role, id);
       }
     });
     revalidateReview();
@@ -162,7 +164,7 @@ export async function bulkRejectAction(ids: string[]): Promise<ActionResult> {
     const { sql, role } = await sessionUser();
     await sql.tx(async (tx) => {
       for (const id of ids) {
-        await rejectDraft(tx, role, id);
+        await rejectDraftInTx(tx, role, id);
       }
     });
     revalidateReview();

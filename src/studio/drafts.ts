@@ -114,22 +114,6 @@ async function cancelUnfinishedPublishJobs(tx: Sql, draftId: string): Promise<vo
   );
 }
 
-async function transitionDraftStatus(
-  tx: Sql,
-  id: string,
-  from: DraftStatus,
-  to: DraftStatus,
-  now: Date,
-): Promise<void> {
-  const rows = await tx.rows<{ id: string }>(
-    `update drafts set status = $1, updated_at = $2 where id = $3 and status = $4 returning id`,
-    [to, now, id, from],
-  );
-  if (!rows[0]) {
-    throw new Error("Status draf sudah berubah, muat ulang halaman");
-  }
-}
-
 function requireReviewWrite(role: Role): void {
   if (!can(role, "review.write")) {
     throw new Error("forbidden");
@@ -146,6 +130,12 @@ function blockIfDirty(textDirty: boolean): void {
   if (textDirty) {
     throw new Error("Render dulu teks yang baru");
   }
+}
+
+async function failPublishWrite(tx: Sql, id: string): Promise<never> {
+  const fresh = await loadDraftRow(tx, id);
+  blockIfDirty(fresh.text_dirty);
+  throw new Error("Status draf sudah berubah.");
 }
 
 async function loadDraftRow(sql: Sql, id: string): Promise<DraftRow> {
@@ -388,22 +378,24 @@ export async function setTemplate(
   ]);
 }
 
-export async function approveDraft(sql: Sql, role: Role, id: string): Promise<void> {
+export async function approveDraftInTx(tx: Sql, role: Role, id: string): Promise<void> {
   requirePublish(role);
-  const row = await loadDraftRow(sql, id);
+  const row = await loadDraftRow(tx, id);
   blockIfDirty(row.text_dirty);
   assertTransition("human", row.status, "approved");
+  const updated = await tx.rows<{ id: string }>(
+    `update drafts set status = 'approved', updated_at = now()
+     where id = $1 and status = $2 and text_dirty = false returning id`,
+    [id, row.status],
+  );
+  if (!updated[0]) {
+    await failPublishWrite(tx, id);
+  }
+}
+
+export async function approveDraft(sql: Sql, role: Role, id: string): Promise<void> {
   await sql.tx(async (tx) => {
-    const updated = await tx.rows<{ id: string }>(
-      `update drafts set status = 'approved', updated_at = now()
-       where id = $1 and status = $2 and text_dirty = false returning id`,
-      [id, row.status],
-    );
-    if (!updated[0]) {
-      const fresh = await loadDraftRow(tx, id);
-      blockIfDirty(fresh.text_dirty);
-      throw new Error("Status draf sudah berubah, muat ulang halaman");
-    }
+    await approveDraftInTx(tx, role, id);
   });
 }
 
@@ -427,9 +419,7 @@ export async function scheduleDraftInTx(
     [scheduledAt, id, row.status],
   );
   if (!updated[0]) {
-    const fresh = await loadDraftRow(tx, id);
-    blockIfDirty(fresh.text_dirty);
-    throw new Error("Status draf sudah berubah, muat ulang halaman");
+    await failPublishWrite(tx, id);
   }
   await enqueue(tx, {
     name: "publisher.publish",
@@ -452,10 +442,31 @@ export async function scheduleDraft(
 async function postDraftNowInTx(tx: Sql, id: string, row: DraftRow, now: Date): Promise<void> {
   await cancelUnfinishedPublishJobs(tx, id);
   if (row.status === "needs_review") {
-    await transitionDraftStatus(tx, id, "needs_review", "approved", now);
-    await transitionDraftStatus(tx, id, "approved", "posting", now);
+    const approved = await tx.rows<{ id: string }>(
+      `update drafts set status = 'approved', updated_at = $1
+       where id = $2 and status = 'needs_review' and text_dirty = false returning id`,
+      [now, id],
+    );
+    if (!approved[0]) {
+      await failPublishWrite(tx, id);
+    }
+    const posting = await tx.rows<{ id: string }>(
+      `update drafts set status = 'posting', updated_at = $1
+       where id = $2 and status = 'approved' and text_dirty = false returning id`,
+      [now, id],
+    );
+    if (!posting[0]) {
+      await failPublishWrite(tx, id);
+    }
   } else {
-    await transitionDraftStatus(tx, id, row.status, "posting", now);
+    const posting = await tx.rows<{ id: string }>(
+      `update drafts set status = 'posting', updated_at = $1
+       where id = $2 and status = $3 and text_dirty = false returning id`,
+      [now, id, row.status],
+    );
+    if (!posting[0]) {
+      await failPublishWrite(tx, id);
+    }
   }
   await enqueue(tx, {
     name: "publisher.publish",
@@ -498,14 +509,43 @@ export async function markPostedManually(sql: Sql, role: Role, id: string): Prom
   });
 }
 
-export async function rejectDraft(sql: Sql, role: Role, id: string): Promise<void> {
+export async function rejectDraftInTx(tx: Sql, role: Role, id: string): Promise<void> {
   requireReviewWrite(role);
-  const row = await loadDraftRow(sql, id);
+  const row = await loadDraftRow(tx, id);
   assertTransition("human", row.status, "rejected");
+  const updated = await tx.rows<{ id: string }>(
+    `update drafts set status = 'rejected', updated_at = now() where id = $1 and status = $2 returning id`,
+    [id, row.status],
+  );
+  if (!updated[0]) {
+    throw new Error("Status draf sudah berubah.");
+  }
+  await cancelUnfinishedPublishJobs(tx, id);
+}
+
+export async function rejectDraft(sql: Sql, role: Role, id: string): Promise<void> {
   await sql.tx(async (tx) => {
-    await cancelUnfinishedPublishJobs(tx, id);
-    await tx.rows(`update drafts set status = 'rejected', updated_at = now() where id = $1`, [id]);
+    await rejectDraftInTx(tx, role, id);
   });
+}
+
+export async function deleteDraftInTx(
+  tx: Sql,
+  role: Role,
+  id: string,
+  expectedStatus: DraftStatus,
+  topicId: string,
+): Promise<void> {
+  requireReviewWrite(role);
+  const deleted = await tx.rows<{ id: string }>(
+    `delete from drafts where id = $1 and status = $2 and status <> 'posting' returning id`,
+    [id, expectedStatus],
+  );
+  if (!deleted[0]) {
+    throw new Error("Status draf sudah berubah.");
+  }
+  await cancelUnfinishedPublishJobs(tx, id);
+  await tx.rows(`update topics set state = 'passed' where id = $1`, [topicId]);
 }
 
 export async function deleteDraft(sql: Sql, role: Role, id: string): Promise<void> {
@@ -515,20 +555,19 @@ export async function deleteDraft(sql: Sql, role: Role, id: string): Promise<voi
     throw new Error("Tidak bisa hapus saat posting");
   }
   await sql.tx(async (tx) => {
-    await cancelUnfinishedPublishJobs(tx, id);
-    await tx.rows(`delete from drafts where id = $1`, [id]);
-    await tx.rows(`update topics set state = 'passed' where id = $1`, [row.topic_id]);
+    await deleteDraftInTx(tx, role, id, row.status, row.topic_id);
   });
 }
 
 async function retryFailedInTx(tx: Sql, id: string, now: Date): Promise<void> {
   await cancelUnfinishedPublishJobs(tx, id);
   const rows = await tx.rows<{ id: string }>(
-    `update drafts set status = 'posting', error = null, updated_at = $1 where id = $2 and status = 'failed' returning id`,
+    `update drafts set status = 'posting', error = null, updated_at = $1
+     where id = $2 and status = 'failed' and text_dirty = false returning id`,
     [now, id],
   );
   if (!rows[0]) {
-    throw new Error("Status draf sudah berubah, muat ulang halaman");
+    await failPublishWrite(tx, id);
   }
   await enqueue(tx, {
     name: "publisher.publish",
