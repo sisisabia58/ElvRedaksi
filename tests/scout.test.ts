@@ -9,16 +9,20 @@ import { enqueue, runDueJobs } from "../src/jobs/runner";
 import { isBlockedFetchTarget, PRIVATE_FETCH_MESSAGE } from "../src/rss/fetch-guard";
 
 const xml = `<?xml version="1.0"?><rss><channel>
-  <item><title>Alat iklan baru</title><link>https://news.example/a</link>
+  <item><title>Alat iklan baru</title><link>https://203.0.113.1/a</link>
     <pubDate>Wed, 28 Oct 2026 01:00:00 GMT</pubDate><description>Cuplikan.</description></item>
-  <item><title>Duplikat</title><link>https://news.example/a</link><description></description></item>
+  <item><title>Duplikat</title><link>https://203.0.113.1/a</link><description></description></item>
 </channel></rss>`;
 
 describe("scout", () => {
   it("parses rss and ignores a second item with the same url", () => {
     const items = parseFeed(xml);
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ title: "Alat iklan baru", url: "https://news.example/a", summary: "Cuplikan." });
+    expect(items[0]).toMatchObject({ title: "Alat iklan baru", url: "https://203.0.113.1/a", summary: "Cuplikan." });
+    const inlineXml = `<?xml version="1.0"?><rss><channel><item><title>T</title><link>https://203.0.113.1/b</link>
+      <description>Halo <b>dunia</b> indah</description></item></channel></rss>`;
+    const inline = parseFeed(inlineXml);
+    expect(inline[0]?.summary).toBe("Halo dunia indah");
     expect(excerptFromHtml("<style>x</style><p>Halo <b>dunia</b></p><img src='https://news.example/a.jpg'>")).toBe(
       "Halo dunia",
     );
@@ -27,7 +31,7 @@ describe("scout", () => {
   it("stores a topic, records an empty scan, and schedules the next one", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);
-    await addSource(sql, "admin", { name: "Contoh", url: "https://news.example/feed", lang: "ID" });
+    await addSource(sql, "admin", { name: "Contoh", url: "https://203.0.113.1/feed", lang: "ID" });
     await runScout({
       sql,
       payload: {},
@@ -65,7 +69,7 @@ describe("scout", () => {
   it("queues the next scout.scan after runDueJobs finishes the in-flight job", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);
-    await addSource(sql, "admin", { name: "Contoh", url: "https://news.example/feed", lang: "ID" });
+    await addSource(sql, "admin", { name: "Contoh", url: "https://203.0.113.1/feed", lang: "ID" });
     const now = new Date("2026-10-28T10:00:00Z");
     await enqueue(sql, { name: "scout.scan", payload: {}, runAt: now, manual: false });
 
@@ -93,8 +97,13 @@ describe("scout", () => {
   });
 
   it("rejects private fetch targets for feeds and skips private article urls", async () => {
-    expect(isBlockedFetchTarget("http://127.0.0.1/feed")).toBe(true);
-    expect(isBlockedFetchTarget("https://news.example/feed")).toBe(false);
+    expect(await isBlockedFetchTarget("http://127.0.0.1/feed")).toBe(true);
+    expect(await isBlockedFetchTarget("http://10.0.0.1/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://172.16.0.1/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://192.168.0.1/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://169.254.169.254/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://[::1]/")).toBe(true);
+    expect(await isBlockedFetchTarget("http://1.1.1.1/")).toBe(false);
 
     const sql = await createTestSql();
     await seedDefaults(sql);

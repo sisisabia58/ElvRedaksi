@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SCOUT_INTERVAL_MS } from "../domain/constants";
-import { assertPublicFetchUrl } from "../rss/fetch-guard";
+import { assertPublicFetchUrl, fetchPublicText } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
 import { enqueue, type JobCtx } from "./runner";
@@ -28,44 +28,46 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 
   for (const source of sources) {
     try {
-      assertPublicFetchUrl(source.url);
+      await assertPublicFetchUrl(source.url);
       const xml = await ctx.fetchFeed(source.url);
       const items = parseFeed(xml);
 
       for (const item of items) {
         let excerpt = "";
         try {
-          assertPublicFetchUrl(item.url);
+          await assertPublicFetchUrl(item.url);
           const html = await ctx.fetchPage(item.url);
           excerpt = excerptFromHtml(html);
         } catch {
           excerpt = "";
         }
 
-        const inserted = await ctx.sql.rows<{ id: string }>(
-          `insert into topics (id, source_id, title, url, summary, excerpt, published_at)
-           values ($1, $2, $3, $4, $5, $6, $7)
-           on conflict (url) do nothing
-           returning id`,
-          [
-            randomUUID(),
-            source.id,
-            item.title,
-            item.url,
-            item.summary,
-            excerpt,
-            item.publishedAt,
-          ],
-        );
-        if (inserted[0]) {
-          newTopicCount += 1;
-          await enqueue(ctx.sql, {
-            name: "analyst.score",
-            payload: { topicId: inserted[0].id },
-            runAt: ctx.now,
-            manual: ctx.manual,
-          });
-        }
+        await ctx.sql.tx(async (tx) => {
+          const inserted = await tx.rows<{ id: string }>(
+            `insert into topics (id, source_id, title, url, summary, excerpt, published_at)
+             values ($1, $2, $3, $4, $5, $6, $7)
+             on conflict (url) do nothing
+             returning id`,
+            [
+              randomUUID(),
+              source.id,
+              item.title,
+              item.url,
+              item.summary,
+              excerpt,
+              item.publishedAt,
+            ],
+          );
+          if (inserted[0]) {
+            newTopicCount += 1;
+            await enqueue(tx, {
+              name: "analyst.score",
+              payload: { topicId: inserted[0].id },
+              runAt: ctx.now,
+              manual: ctx.manual,
+            });
+          }
+        });
       }
 
       await ctx.sql.rows(
@@ -97,12 +99,7 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<string> {
-  assertPublicFetchUrl(url);
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  return response.text();
+  return fetchPublicText(url, timeoutMs);
 }
 
 async function runScoutCron(ctx: JobCtx): Promise<void> {
