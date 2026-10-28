@@ -15,8 +15,13 @@ describe("draft gate", () => {
     expect(() => assertTransition("worker", "scheduled", "posting")).not.toThrow();
     expect(() => assertTransition("worker", "posting", "posted")).not.toThrow();
     expect(() => assertTransition("worker", "posting", "failed")).not.toThrow();
-    expect(() => assertTransition("worker", "drafted", "needs_review")).not.toThrow();
     expect(() => assertTransition("human", "needs_review", "posting")).toThrow(/illegal/);
+    expect(() => assertTransition("worker", "needs_review", "scheduled")).toThrow(
+      /publish requires human approval/,
+    );
+    expect(() => assertTransition("worker", "approved", "scheduled")).toThrow(
+      /publish requires human approval/,
+    );
   });
 
   it("requires the manual flag to skip the API", () => {

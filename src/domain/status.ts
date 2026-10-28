@@ -22,7 +22,7 @@ const EDGES: Record<DraftStatus, DraftStatus[]> = {
   rejected: ["needs_review"],
 };
 
-const WORKER_PUBLISH = new Set(["scheduled>posting", "posting>posted", "posting>failed"]);
+const WORKER_ALLOW = new Set(["scheduled>posting", "posting>posted", "posting>failed"]);
 
 export function assertTransition(
   actor: ActorKind,
@@ -31,11 +31,7 @@ export function assertTransition(
   manual = false,
 ): void {
   const key = `${from}>${to}`;
-  if (
-    actor === "worker" &&
-    (to === "posting" || to === "posted" || to === "failed") &&
-    !WORKER_PUBLISH.has(key)
-  ) {
+  if (actor === "worker" && !WORKER_ALLOW.has(key)) {
     throw new Error("publish requires human approval");
   }
   if (!EDGES[from].includes(to)) throw new Error(`illegal ${from} -> ${to}`);
