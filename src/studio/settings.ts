@@ -1,0 +1,126 @@
+import { z } from "zod";
+import { can, type Role } from "../auth/rbac";
+import type { Sql } from "../db/client";
+
+export type Settings = {
+  name: string;
+  handle: string;
+  initial: string;
+  accent: string;
+  kicker: string;
+  workStart: string;
+  workEnd: string;
+  passThreshold: number;
+  defaultFormat: "carousel_full" | "teaser_bio";
+  defaultTemplate: "stabilo" | "foto_penuh" | "serif" | "catatan";
+  publicBaseUrl: string;
+  igUsername: string | null;
+};
+
+export type SettingsInput = Omit<Settings, "igUsername">;
+
+const settingsSchema = z.object({
+  name: z.string(),
+  handle: z.string().regex(/^[a-z0-9._]{2,30}$/),
+  initial: z.string().length(1),
+  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  kicker: z.string(),
+  workStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  workEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  passThreshold: z.number().int().min(0).max(100),
+  defaultFormat: z.enum(["carousel_full", "teaser_bio"]),
+  defaultTemplate: z.enum(["stabilo", "foto_penuh", "serif", "catatan"]),
+  publicBaseUrl: z.url(),
+});
+
+export async function getSettings(sql: Sql): Promise<Settings> {
+  const rows = await sql.rows<{
+    name: string;
+    handle: string;
+    initial: string;
+    accent: string;
+    kicker: string;
+    work_start: string;
+    work_end: string;
+    pass_threshold: number;
+    default_format: Settings["defaultFormat"];
+    default_template: Settings["defaultTemplate"];
+    public_base_url: string;
+    ig_username: string | null;
+  }>(
+    `select b.name, b.handle, b.initial, b.accent, b.kicker, b.work_start, b.work_end,
+            b.pass_threshold, b.default_format, b.default_template, b.public_base_url,
+            ig.username as ig_username
+     from brand b
+     left join ig_connection ig on ig.id = 1
+     where b.id = 1`,
+  );
+  const row = rows[0];
+  return {
+    name: row.name,
+    handle: row.handle,
+    initial: row.initial,
+    accent: row.accent,
+    kicker: row.kicker,
+    workStart: row.work_start,
+    workEnd: row.work_end,
+    passThreshold: Number(row.pass_threshold),
+    defaultFormat: row.default_format,
+    defaultTemplate: row.default_template,
+    publicBaseUrl: row.public_base_url,
+    igUsername: row.ig_username,
+  };
+}
+
+export async function saveSettings(sql: Sql, role: Role, input: SettingsInput): Promise<void> {
+  if (!can(role, "settings.write")) {
+    throw new Error("forbidden");
+  }
+  const parsed = settingsSchema.parse(input);
+  await sql.rows(
+    `update brand set
+       name = $1, handle = $2, initial = $3, accent = $4, kicker = $5,
+       work_start = $6, work_end = $7, pass_threshold = $8,
+       default_format = $9, default_template = $10, public_base_url = $11
+     where id = 1`,
+    [
+      parsed.name,
+      parsed.handle,
+      parsed.initial,
+      parsed.accent,
+      parsed.kicker,
+      parsed.workStart,
+      parsed.workEnd,
+      parsed.passThreshold,
+      parsed.defaultFormat,
+      parsed.defaultTemplate,
+      parsed.publicBaseUrl,
+    ],
+  );
+}
+
+export async function saveInstagramToken(
+  sql: Sql,
+  role: Role,
+  input: { igUserId: string; accessToken: string; username: string },
+): Promise<void> {
+  if (!can(role, "settings.write")) {
+    throw new Error("forbidden");
+  }
+  const igUserId = input.igUserId.trim();
+  const accessToken = input.accessToken.trim();
+  if (!igUserId || !accessToken) {
+    await sql.rows(
+      `update ig_connection
+       set ig_user_id = null, access_token = null, username = null, connected_at = null
+       where id = 1`,
+    );
+    return;
+  }
+  await sql.rows(
+    `update ig_connection
+     set ig_user_id = $1, access_token = $2, username = $3, connected_at = now()
+     where id = 1`,
+    [igUserId, accessToken, input.username.trim()],
+  );
+}

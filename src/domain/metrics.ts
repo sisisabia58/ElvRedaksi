@@ -17,3 +17,20 @@ export function deltaPct(current: number, previous: number): number | null {
 export function formatUsd(amount: number): string {
   return `$${amount.toFixed(3)}`;
 }
+
+export function relativeId(from: Date, now: Date): string {
+  const diffMs = now.getTime() - from.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) {
+    return "baru saja";
+  }
+  if (minutes < 60) {
+    return `${minutes} mnt lalu`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} jam lalu`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days} hari lalu`;
+}
