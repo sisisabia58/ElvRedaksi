@@ -17,7 +17,8 @@ function validateCoverPhotoDataUrl(photoDataUrl: string): string {
     throw new Error("Gambar harus PNG atau JPEG");
   }
   const base64 = photoDataUrl.slice(photoDataUrl.indexOf(",") + 1);
-  const byteLength = Math.floor((base64.length * 3) / 4);
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const byteLength = Math.floor((base64.length * 3) / 4) - padding;
   if (byteLength > MAX_COVER_PHOTO_BYTES) {
     throw new Error("Gambar maksimal 2 MB");
   }

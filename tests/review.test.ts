@@ -244,6 +244,28 @@ describe("review", () => {
     );
   });
 
+  it("accepts a cover of exactly 2 MB and rejects one byte over", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set slides = $1::jsonb where id = $2`, [
+      JSON.stringify([{ role: "cover", kicker: "AI", headline: "Judul lama cukup", body: "Isi." }]),
+      DRAFT_ID,
+    ]);
+    const exact = pngDataUrl(2 * 1024 * 1024);
+    expect(Buffer.from(exact.slice(exact.indexOf(",") + 1), "base64").length).toBe(2_097_152);
+    await saveCoverPhoto(sql, "social_media", DRAFT_ID, exact);
+    const saved = await readDraft(sql, DRAFT_ID);
+    expect(saved.slides.find((slide) => slide.role === "cover")?.photoDataUrl).toBe(exact);
+
+    const oneOver = pngDataUrl(2 * 1024 * 1024 + 1);
+    expect(Buffer.from(oneOver.slice(oneOver.indexOf(",") + 1), "base64").length).toBe(2_097_153);
+    await expect(saveCoverPhoto(sql, "social_media", DRAFT_ID, oneOver)).rejects.toThrow(
+      "Gambar maksimal 2 MB",
+    );
+    const afterReject = await readDraft(sql, DRAFT_ID);
+    expect(afterReject.slides.find((slide) => slide.role === "cover")?.photoDataUrl).toBe(exact);
+  });
+
   it("lists only scheduled drafts and skips posting in bulk review actions", async () => {
     const sql = await createTestSql();
     await seedDraft(sql, false);
