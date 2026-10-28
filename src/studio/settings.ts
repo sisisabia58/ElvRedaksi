@@ -21,16 +21,22 @@ export type SettingsInput = Omit<Settings, "igUsername">;
 
 const settingsSchema = z.object({
   name: z.string(),
-  handle: z.string().regex(/^[a-z0-9._]{2,30}$/),
-  initial: z.string().length(1),
-  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  handle: z
+    .string()
+    .regex(/^[a-z0-9._]{2,30}$/, "Handle 2–30 karakter: huruf kecil, angka, titik, atau garis bawah."),
+  initial: z.string().length(1, "Inisial harus 1 karakter."),
+  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Aksen harus warna hex, contoh #d7ff3a."),
   kicker: z.string(),
-  workStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-  workEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-  passThreshold: z.number().int().min(0).max(100),
+  workStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Jam harus HH:MM."),
+  workEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Jam harus HH:MM."),
+  passThreshold: z
+    .number()
+    .int()
+    .min(0, "Ambang skor 0 sampai 100.")
+    .max(100, "Ambang skor 0 sampai 100."),
   defaultFormat: z.enum(["carousel_full", "teaser_bio"]),
   defaultTemplate: z.enum(["stabilo", "foto_penuh", "serif", "catatan"]),
-  publicBaseUrl: z.url(),
+  publicBaseUrl: z.url("URL publik tidak valid."),
 });
 
 export async function getSettings(sql: Sql): Promise<Settings> {
