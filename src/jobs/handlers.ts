@@ -913,6 +913,10 @@ async function graphGet(
   return body;
 }
 
+function hasGraphError(body: unknown): boolean {
+  return isRecord(body) && isRecord(body.error);
+}
+
 function readFollowers(body: unknown): number {
   if (!isRecord(body) || isRecord(body.error)) return 0;
   return typeof body.followers_count === "number" && Number.isFinite(body.followers_count)
@@ -998,6 +1002,15 @@ function readPosts(body: unknown): {
   return posts;
 }
 
+async function recordInsightsFailure(ctx: JobCtx): Promise<void> {
+  await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+    randomUUID(),
+    "analitik",
+    "Analitik gagal diambil dari Instagram",
+  ]);
+  await enqueueNextInsights(ctx);
+}
+
 async function enqueueNextInsights(ctx: JobCtx): Promise<void> {
   // The runner sets finished_at only after this handler returns, so the in-flight
   // row is still open. Count unlocked rows only; otherwise the next interval is never
@@ -1036,19 +1049,34 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
 
   const since = Math.floor((ctx.now.getTime() - 90 * 24 * 60 * 60 * 1000) / 1000);
   const until = Math.floor(ctx.now.getTime() / 1000);
-  const [followersBody, insightsBody, mediaBody] = await Promise.all([
-    graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }),
-    graphGet(fetchImpl, `${igUserId}/insights`, token, {
-      metric: "views,reach",
-      period: "day",
-      since: String(since),
-      until: String(until),
-    }),
-    graphGet(fetchImpl, `${igUserId}/media`, token, {
-      fields: "id,timestamp,like_count,comments_count,media_type,insights.metric(views,reach,saved,shares)",
-      limit: "50",
-    }),
-  ]);
+  let followersBody: unknown;
+  let insightsBody: unknown;
+  let mediaBody: unknown;
+  try {
+    [followersBody, insightsBody, mediaBody] = await Promise.all([
+      graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }),
+      graphGet(fetchImpl, `${igUserId}/insights`, token, {
+        metric: "views,reach",
+        period: "day",
+        since: String(since),
+        until: String(until),
+      }),
+      graphGet(fetchImpl, `${igUserId}/media`, token, {
+        fields: "id,timestamp,like_count,comments_count,media_type,insights.metric(views,reach,saved,shares)",
+        limit: "50",
+      }),
+    ]);
+  } catch {
+    await recordInsightsFailure(ctx);
+    return;
+  }
+
+  // A metric error inside insights `data` is still a zero. A top-level error
+  // on followers or account insights is a failed sync, not a snapshot of zeros.
+  if (hasGraphError(followersBody) || hasGraphError(insightsBody)) {
+    await recordInsightsFailure(ctx);
+    return;
+  }
 
   const followers = readFollowers(followersBody);
   const normalized = normalizeInsights({
