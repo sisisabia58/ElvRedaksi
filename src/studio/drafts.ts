@@ -303,8 +303,18 @@ export async function saveDraftText(
     }
     const cover: SlideWithPhoto = { ...slide, kicker: input.kicker };
     const incoming = (slide as SlideWithPhoto).photoDataUrl;
-    if (!incoming && existingPhoto) {
-      cover.photoDataUrl = existingPhoto;
+    let photo: string | undefined;
+    if (incoming) {
+      photo = validateCoverPhotoDataUrl(incoming);
+    } else if (existingPhoto) {
+      try {
+        photo = validateCoverPhotoDataUrl(existingPhoto);
+      } catch {
+        photo = undefined;
+      }
+    }
+    if (photo) {
+      cover.photoDataUrl = photo;
     }
     return cover;
   });
@@ -383,7 +393,18 @@ export async function approveDraft(sql: Sql, role: Role, id: string): Promise<vo
   const row = await loadDraftRow(sql, id);
   blockIfDirty(row.text_dirty);
   assertTransition("human", row.status, "approved");
-  await sql.rows(`update drafts set status = 'approved', updated_at = now() where id = $1`, [id]);
+  await sql.tx(async (tx) => {
+    const updated = await tx.rows<{ id: string }>(
+      `update drafts set status = 'approved', updated_at = now()
+       where id = $1 and status = $2 and text_dirty = false returning id`,
+      [id, row.status],
+    );
+    if (!updated[0]) {
+      const fresh = await loadDraftRow(tx, id);
+      blockIfDirty(fresh.text_dirty);
+      throw new Error("Status draf sudah berubah, muat ulang halaman");
+    }
+  });
 }
 
 export async function scheduleDraftInTx(
@@ -399,10 +420,17 @@ export async function scheduleDraftInTx(
     throw new Error("Jadwal harus di masa depan");
   }
   assertTransition("human", row.status, "scheduled");
-  await tx.rows(
-    `update drafts set status = 'scheduled', scheduled_at = $1, updated_at = now() where id = $2`,
-    [scheduledAt, id],
+  await cancelUnfinishedPublishJobs(tx, id);
+  const updated = await tx.rows<{ id: string }>(
+    `update drafts set status = 'scheduled', scheduled_at = $1, updated_at = now()
+     where id = $2 and status = $3 and text_dirty = false returning id`,
+    [scheduledAt, id, row.status],
   );
+  if (!updated[0]) {
+    const fresh = await loadDraftRow(tx, id);
+    blockIfDirty(fresh.text_dirty);
+    throw new Error("Status draf sudah berubah, muat ulang halaman");
+  }
   await enqueue(tx, {
     name: "publisher.publish",
     payload: { draftId: id },
@@ -457,10 +485,17 @@ export async function markPostedManually(sql: Sql, role: Role, id: string): Prom
   const row = await loadDraftRow(sql, id);
   assertTransition("human", row.status, "posted", true);
   const now = new Date();
-  await sql.rows(
-    `update drafts set status = 'posted', manual = true, posted_at = $1, updated_at = $1 where id = $2`,
-    [now, id],
-  );
+  await sql.tx(async (tx) => {
+    await cancelUnfinishedPublishJobs(tx, id);
+    const updated = await tx.rows<{ id: string }>(
+      `update drafts set status = 'posted', manual = true, posted_at = $1, updated_at = $1
+       where id = $2 and status = $3 returning id`,
+      [now, id, row.status],
+    );
+    if (!updated[0]) {
+      throw new Error("Status draf sudah berubah, muat ulang halaman");
+    }
+  });
 }
 
 export async function rejectDraft(sql: Sql, role: Role, id: string): Promise<void> {

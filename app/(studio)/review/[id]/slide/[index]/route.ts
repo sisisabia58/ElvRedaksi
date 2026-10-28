@@ -35,7 +35,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
   return new NextResponse(new Uint8Array(rows[0].bytes), {
     headers: {
       "content-type": "image/png",
-      "cache-control": "private, max-age=60",
+      "cache-control": "private, no-store",
     },
   });
 }

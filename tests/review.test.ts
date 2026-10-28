@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
-import { approveDraft, listDrafts, markPostedManually, postDraftNow, rejectDraft, retryFailed, saveCoverPhoto, saveDraftText } from "../src/studio/drafts";
+import { approveDraft, listDrafts, markPostedManually, postDraftNow, rejectDraft, retryFailed, saveCoverPhoto, saveDraftText, scheduleDraft } from "../src/studio/drafts";
 import { enqueue } from "../src/jobs/runner";
 
 async function seedDraft(sql: Awaited<ReturnType<typeof createTestSql>>, dirty: boolean) {
@@ -108,5 +108,24 @@ describe("review", () => {
     await expect(retryFailed(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1")).rejects.toThrow();
     const jobs = await sql.rows("select id from jobs where name = 'publisher.publish'");
     expect(jobs).toHaveLength(1);
+  });
+
+  it("cancels scheduled publish jobs when marked posted manually", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    const runAt = new Date(Date.now() + 3600_000);
+    await scheduleDraft(sql, "admin", draftId, runAt);
+    await markPostedManually(sql, "admin", draftId);
+    const status = await sql.rows<{ status: string }>("select status from drafts where id = $1", [draftId]);
+    expect(status[0]?.status).toBe("posted");
+    const jobs = await sql.rows(
+      `select id from jobs
+       where name = 'publisher.publish'
+         and finished_at is null
+         and payload->>'draftId' = $1`,
+      [draftId],
+    );
+    expect(jobs).toHaveLength(0);
   });
 });
