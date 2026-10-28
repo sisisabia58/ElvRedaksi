@@ -33,4 +33,13 @@ export class PlaywrightRasterizer implements Rasterizer {
       await page.close();
     }
   }
+
+  async close(): Promise<void> {
+    if (!this.browserPromise) {
+      return;
+    }
+    const browser = await this.browserPromise;
+    this.browserPromise = null;
+    await browser.close();
+  }
 }

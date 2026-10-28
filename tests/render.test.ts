@@ -15,7 +15,13 @@ const slides = [
 describe("designer", () => {
   it("renders a 4:5 teaser without a remote image", () => {
     expect(slidesForFormat("teaser_bio", slides).map((s) => s.role)).toEqual(["cover", "cta"]);
-    expect(slidesForFormat("carousel_full", slides)).toHaveLength(3);
+    expect(slidesForFormat("carousel_full", slides).map((s) => s.role)).toEqual(["cover", "point", "point"]);
+    const carouselOnly = slides.filter((s) => s.role !== "cta");
+    expect(slidesForFormat("carousel_full", carouselOnly)).toHaveLength(3);
+    expect(() => slidesForFormat("carousel_full", [slides[0]])).toThrow(/jumlah slide tidak valid/);
+    expect(() => slidesForFormat("teaser_bio", slides.filter((s) => s.role !== "cta"))).toThrow(
+      /slide tidak lengkap/,
+    );
     const html = renderSlideHtml({
       template: "serif",
       slide: slides[0],
@@ -32,6 +38,30 @@ describe("designer", () => {
     expect(html).toContain("Sumber: Contoh");
     expect(html).toContain("@redaksi");
     expect(html).not.toMatch(/https?:\/\//);
+    const withPhoto = renderSlideHtml({
+      template: "serif",
+      slide: slides[0],
+      index: 0,
+      total: 1,
+      handle: "redaksi",
+      sourceName: "Contoh",
+      accent: "#d7ff3a",
+      focalY: 50,
+      photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=" onerror="alert(1)',
+    });
+    expect(withPhoto).not.toContain("<img");
+    const validPhoto = renderSlideHtml({
+      template: "serif",
+      slide: slides[0],
+      index: 0,
+      total: 1,
+      handle: "redaksi",
+      sourceName: "Contoh",
+      accent: "#d7ff3a",
+      focalY: 50,
+      photoDataUrl: "data:image/png;base64,iVBORw0KGgo",
+    });
+    expect(validPhoto).toContain("<img");
   });
 
   it("stores two pngs and moves the draft to review", async () => {

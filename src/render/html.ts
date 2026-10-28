@@ -62,9 +62,26 @@ function geometricCoverMarkup(headline: string, accent: string): string {
   return `<div style="position:absolute;inset:0;overflow:hidden;">${rects.join("")}</div>`;
 }
 
+const SAFE_DATA_IMAGE =
+  /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+
+export function safePhotoDataUrl(photoDataUrl: string | null): string | null {
+  if (!photoDataUrl || photoDataUrl.trim() !== photoDataUrl) {
+    return null;
+  }
+  if (/[\s"']/.test(photoDataUrl)) {
+    return null;
+  }
+  if (!SAFE_DATA_IMAGE.test(photoDataUrl)) {
+    return null;
+  }
+  return photoDataUrl;
+}
+
 function photoOrGeo(photoDataUrl: string | null, focalY: number, headline: string, accent: string): string {
-  if (photoDataUrl?.startsWith("data:image/")) {
-    return `<img src="${photoDataUrl}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center ${focalY}%;" />`;
+  const safeSrc = safePhotoDataUrl(photoDataUrl);
+  if (safeSrc) {
+    return `<img src="${escapeHtml(safeSrc)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center ${focalY}%;" />`;
   }
   return geometricCoverMarkup(headline, accent);
 }
@@ -154,15 +171,19 @@ export function renderSlideHtml(input: RenderSlideInput): string {
 
 export function slidesForFormat(format: "carousel_full" | "teaser_bio", slides: Slide[]): Slide[] {
   const cover = slides.find((s) => s.role === "cover");
-  const cta = slides.find((s) => s.role === "cta");
-  const points = slides.filter((s) => s.role === "point");
-  if (!cover || !cta) {
+  if (!cover) {
     throw new Error("slide tidak lengkap");
   }
   const picked =
     format === "teaser_bio"
-      ? [cover, cta]
-      : [cover, ...(points.length > 0 ? points : [cta])];
+      ? (() => {
+          const cta = slides.find((s) => s.role === "cta");
+          if (!cta) {
+            throw new Error("slide tidak lengkap");
+          }
+          return [cover, cta];
+        })()
+      : [cover, ...slides.filter((s) => s.role === "point")];
   if (picked.length < 2 || picked.length > 10) {
     throw new Error("jumlah slide tidak valid");
   }

@@ -494,6 +494,7 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
 export type DesignerCtx = JobCtx & { rasterizer?: Rasterizer };
 
 export async function runDesigner(ctx: DesignerCtx): Promise<void> {
+  const ownedRasterizer = ctx.rasterizer === undefined;
   const rasterizer = ctx.rasterizer ?? new PlaywrightRasterizer();
   const draftId = ctx.payload.draftId;
   if (typeof draftId !== "string" || !draftId) {
@@ -534,28 +535,34 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   await ctx.sql.rows(`delete from assets where draft_id = $1`, [draftId]);
 
   try {
-    for (let index = 0; index < selected.length; index++) {
-      const html = renderSlideHtml({
-        template,
-        slide: selected[index],
-        index,
-        total: selected.length,
-        handle: draft.handle,
-        sourceName: draft.source_name,
-        accent: draft.accent,
-        focalY: draft.focal_y,
-        photoDataUrl: null,
-      });
-      const bytes = await rasterizer.toPng(html);
-      await ctx.sql.rows(
-        `insert into assets (id, draft_id, slide_index, bytes) values ($1, $2, $3, $4)`,
-        [randomUUID(), draftId, index, bytes],
-      );
+    try {
+      for (let index = 0; index < selected.length; index++) {
+        const html = renderSlideHtml({
+          template,
+          slide: selected[index],
+          index,
+          total: selected.length,
+          handle: draft.handle,
+          sourceName: draft.source_name,
+          accent: draft.accent,
+          focalY: draft.focal_y,
+          photoDataUrl: null,
+        });
+        const bytes = await rasterizer.toPng(html);
+        await ctx.sql.rows(
+          `insert into assets (id, draft_id, slide_index, bytes) values ($1, $2, $3, $4)`,
+          [randomUUID(), draftId, index, bytes],
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.sql.rows(`update drafts set error = $1 where id = $2`, [message, draftId]);
+      throw error;
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await ctx.sql.rows(`update drafts set error = $1 where id = $2`, [message, draftId]);
-    throw error;
+  } finally {
+    if (ownedRasterizer && rasterizer instanceof PlaywrightRasterizer) {
+      await rasterizer.close();
+    }
   }
 
   const nextStatus: DraftStatus = current === "drafted" ? "needs_review" : current;
