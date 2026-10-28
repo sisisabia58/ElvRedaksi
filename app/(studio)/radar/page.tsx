@@ -42,6 +42,7 @@ export default async function RadarPage({
     title: topic.title,
     score: topic.score,
     state: topic.state,
+    sensitive: topic.sensitive,
     tags: topic.tags,
     sourceName: topic.sourceName,
     timeLabel: relativeId(topic.scoredAt ?? topic.discoveredAt, now),

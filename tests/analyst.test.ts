@@ -69,7 +69,10 @@ describe("analyst", () => {
     expect(skipped.map((t) => t.title)).toEqual(["FIXTURE:low"]);
     const log = await sql.rows<{ message: string }>("select message from activity where agent = 'analis'");
     expect(log.at(-1)?.message).toBe("Menilai 1 topik, 1 lolos ambang skor 70");
-    const queued = await sql.rows<{ name: string }>("select name from jobs where name = 'copywriter.write'");
+    const queued = await sql.rows<{ name: string; manual: boolean }>(
+      "select name, manual from jobs where name = 'copywriter.write'",
+    );
     expect(queued).toHaveLength(2);
+    expect(queued.every((job) => job.manual === false)).toBe(true);
   });
 });

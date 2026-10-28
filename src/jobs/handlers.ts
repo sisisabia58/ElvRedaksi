@@ -245,7 +245,7 @@ async function scoreOneTopic(
       name: "copywriter.write",
       payload: { topicId },
       runAt: ctx.now,
-      manual: ctx.manual,
+      manual: false,
     });
   }
 

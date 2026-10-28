@@ -18,6 +18,7 @@ export type RadarTopicView = {
   title: string;
   score: number | null;
   state: string;
+  sensitive: boolean;
   tags: string[];
   sourceName: string;
   timeLabel: string;
@@ -182,6 +183,11 @@ export function RadarPanel({
                 {topic.badge ? (
                   <Badge variant={topic.badge === "Lolos" ? "default" : "secondary"}>
                     {topic.badge}
+                  </Badge>
+                ) : null}
+                {topic.sensitive && topic.state === "passed" ? (
+                  <Badge variant="outline" className="border-[var(--bad)] text-[var(--bad)]">
+                    Cek risiko
                   </Badge>
                 ) : null}
               </div>
