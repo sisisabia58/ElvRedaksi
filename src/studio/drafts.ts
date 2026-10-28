@@ -158,15 +158,7 @@ async function loadDraftRow(sql: Sql, id: string): Promise<DraftRow> {
   return row;
 }
 
-function statusesForReviewTab(status: DraftStatus): DraftStatus[] {
-  if (status === "scheduled") {
-    return ["scheduled", "posting"];
-  }
-  return [status];
-}
-
 export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCard[]> {
-  const statuses = statusesForReviewTab(status);
   const rows = await sql.rows<
     DraftRow & { updated_at: Date; asset_id: string | null }
   >(
@@ -179,7 +171,7 @@ export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCa
      cross join brand b
      where d.status = any($1::text[]) and b.id = 1
      order by d.updated_at desc`,
-    [statuses],
+    [[status]],
   );
   return rows.map((row) => {
     const slides = parseSlides(row.slides);
@@ -342,8 +334,11 @@ export async function saveCoverPhoto(
 
 export async function saveFocal(sql: Sql, role: Role, id: string, focalY: number): Promise<void> {
   requireReviewWrite(role);
-  await loadDraftRow(sql, id);
+  const row = await loadDraftRow(sql, id);
   const clamped = Math.min(100, Math.max(0, Math.round(focalY)));
+  if (Number(row.focal_y) === clamped) {
+    return;
+  }
   await sql.rows(`update drafts set focal_y = $1, text_dirty = true, updated_at = now() where id = $2`, [
     clamped,
     id,
@@ -399,6 +394,19 @@ export async function approveDraft(sql: Sql, role: Role, id: string): Promise<vo
   });
 }
 
+export async function bulkApproveDrafts(sql: Sql, role: Role, ids: string[]): Promise<void> {
+  requirePublish(role);
+  await sql.tx(async (tx) => {
+    for (const id of ids) {
+      const row = await loadDraftRow(tx, id);
+      if (row.status === "posting") {
+        continue;
+      }
+      await approveDraftInTx(tx, role, id);
+    }
+  });
+}
+
 export async function scheduleDraftInTx(
   tx: Sql,
   role: Role,
@@ -436,6 +444,24 @@ export async function scheduleDraft(
 ): Promise<void> {
   await sql.tx(async (tx) => {
     await scheduleDraftInTx(tx, role, id, scheduledAt);
+  });
+}
+
+export async function bulkScheduleDrafts(
+  sql: Sql,
+  role: Role,
+  ids: string[],
+  scheduledAt: Date,
+): Promise<void> {
+  requirePublish(role);
+  await sql.tx(async (tx) => {
+    for (const id of ids) {
+      const row = await loadDraftRow(tx, id);
+      if (row.status === "posting") {
+        continue;
+      }
+      await scheduleDraftInTx(tx, role, id, scheduledAt);
+    }
   });
 }
 
@@ -526,6 +552,19 @@ export async function rejectDraftInTx(tx: Sql, role: Role, id: string): Promise<
 export async function rejectDraft(sql: Sql, role: Role, id: string): Promise<void> {
   await sql.tx(async (tx) => {
     await rejectDraftInTx(tx, role, id);
+  });
+}
+
+export async function bulkRejectDrafts(sql: Sql, role: Role, ids: string[]): Promise<void> {
+  requireReviewWrite(role);
+  await sql.tx(async (tx) => {
+    for (const id of ids) {
+      const row = await loadDraftRow(tx, id);
+      if (row.status === "posting") {
+        continue;
+      }
+      await rejectDraftInTx(tx, role, id);
+    }
   });
 }
 

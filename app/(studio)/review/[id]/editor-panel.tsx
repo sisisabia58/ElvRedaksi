@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import type { Slide } from "@/src/agents/copywriter";
+import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studio/cover-photo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -101,6 +102,7 @@ export function EditorPanel({
   const [scheduleAt, setScheduleAt] = useState("");
   const [copyLabel, setCopyLabel] = useState("Copy caption + hashtag");
   const [error, setError] = useState<string | null>(null);
+  const [blockedPhotoUrl, setBlockedPhotoUrl] = useState<string | null>(null);
 
   const slideTotal = draft.slideCount;
   const clampedIndex = Math.min(slideIndex, Math.max(slideTotal - 1, 0));
@@ -110,7 +112,7 @@ export function EditorPanel({
       .split(/[,\s]+/)
       .map((t) => t.replace(/^#/, "").trim())
       .filter(Boolean);
-    const updatedSlides = slides.map((slide) => {
+    const updatedSlides = omitRejectedCoverPhoto(slides, blockedPhotoUrl).map((slide) => {
       if (slide.role !== "cover") {
         return slide;
       }
@@ -123,7 +125,7 @@ export function EditorPanel({
       altHeadlines,
       kicker,
     };
-  }, [slides, kicker, headline, body, caption, hashtagsText, altHeadlines]);
+  }, [slides, kicker, headline, body, caption, hashtagsText, altHeadlines, blockedPhotoUrl]);
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>, redirect?: string) {
     setError(null);
@@ -154,24 +156,37 @@ export function EditorPanel({
     reader.onload = () => {
       const dataUrl = reader.result;
       if (typeof dataUrl !== "string") {
+        setError("Format gambar tidak valid");
         return;
       }
       setError(null);
       startTransition(async () => {
-        const result = await saveCoverPhotoAction(draft.id, dataUrl);
-        if (!result.ok) {
-          setError(result.error ?? "Terjadi kesalahan");
-          return;
+        try {
+          const result = await saveCoverPhotoAction(draft.id, dataUrl);
+          if (!result.ok) {
+            setBlockedPhotoUrl(dataUrl);
+            setSlides((prev) => omitRejectedCoverPhoto(prev, dataUrl));
+            setError(result.error ?? "Gagal mengunggah gambar");
+            return;
+          }
+          setBlockedPhotoUrl(null);
+          setSlides((prev) =>
+            prev.map((slide) =>
+              slide.role === "cover"
+                ? ({ ...slide, photoDataUrl: dataUrl } as Slide & { photoDataUrl?: string })
+                : slide,
+            ),
+          );
+          router.refresh();
+        } catch (uploadError) {
+          setBlockedPhotoUrl(dataUrl);
+          setSlides((prev) => omitRejectedCoverPhoto(prev, dataUrl));
+          setError(coverUploadRejectionMessage(uploadError));
         }
-        setSlides((prev) =>
-          prev.map((slide) =>
-            slide.role === "cover"
-              ? ({ ...slide, photoDataUrl: dataUrl } as Slide & { photoDataUrl?: string })
-              : slide,
-          ),
-        );
-        router.refresh();
       });
+    };
+    reader.onerror = () => {
+      setError("Gagal mengunggah gambar");
     };
     reader.readAsDataURL(file);
   }
@@ -215,8 +230,11 @@ export function EditorPanel({
   ]);
 
   function commitFocalFromInput(input: HTMLInputElement) {
-    const value = Number(input.value);
+    const value = Math.min(100, Math.max(0, Math.round(Number(input.value))));
     setFocalY(value);
+    if (value === Math.round(Number(draft.focalY))) {
+      return;
+    }
     run(() => saveFocalAction(draft.id, value));
   }
 
@@ -310,6 +328,7 @@ export function EditorPanel({
                     className="mt-2 border-[var(--line)]"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
+                      e.target.value = "";
                       if (file) {
                         void onPhotoFile(file);
                       }

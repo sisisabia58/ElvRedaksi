@@ -8,18 +8,18 @@ import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import type { Slide } from "@/src/agents/copywriter";
 import {
   approveDraft,
-  approveDraftInTx,
+  bulkApproveDrafts,
+  bulkRejectDrafts,
+  bulkScheduleDrafts,
   deleteDraft,
   markPostedManually,
   postDraftNow,
   rejectDraft,
-  rejectDraftInTx,
   retryFailed,
   saveCoverPhoto,
   saveDraftText,
   saveFocal,
   scheduleDraft,
-  scheduleDraftInTx,
   setFormat,
   setTemplate,
 } from "@/src/studio/drafts";
@@ -131,11 +131,7 @@ export async function retryFailedAction(id: string): Promise<ActionResult> {
 export async function bulkApproveAction(ids: string[]): Promise<ActionResult> {
   try {
     const { sql, role } = await sessionUser();
-    await sql.tx(async (tx) => {
-      for (const id of ids) {
-        await approveDraftInTx(tx, role, id);
-      }
-    });
+    await bulkApproveDrafts(sql, role, ids);
     revalidateReview();
     return { ok: true };
   } catch (error) {
@@ -147,11 +143,7 @@ export async function bulkScheduleAction(ids: string[], wibLocal: string): Promi
   try {
     const { sql, role } = await sessionUser();
     const scheduledAt = new Date(`${wibLocal}+07:00`);
-    await sql.tx(async (tx) => {
-      for (const id of ids) {
-        await scheduleDraftInTx(tx, role, id, scheduledAt);
-      }
-    });
+    await bulkScheduleDrafts(sql, role, ids, scheduledAt);
     revalidateReview();
     return { ok: true };
   } catch (error) {
@@ -162,11 +154,7 @@ export async function bulkScheduleAction(ids: string[], wibLocal: string): Promi
 export async function bulkRejectAction(ids: string[]): Promise<ActionResult> {
   try {
     const { sql, role } = await sessionUser();
-    await sql.tx(async (tx) => {
-      for (const id of ids) {
-        await rejectDraftInTx(tx, role, id);
-      }
-    });
+    await bulkRejectDrafts(sql, role, ids);
     revalidateReview();
     return { ok: true };
   } catch (error) {
