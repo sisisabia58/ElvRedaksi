@@ -91,8 +91,18 @@ export default async function Shell({
             </span>
           </div>
         </header>
-        <div className="md:hidden border-b border-[var(--line)] bg-[var(--panel)] py-2">
+        <div className="md:hidden flex items-center gap-2 border-b border-[var(--line)] bg-[var(--panel)] py-2">
           <StudioNavLinks items={items} reviewCount={reviewCount} orientation="horizontal" />
+          <form action={logout} className="shrink-0 pr-3">
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="border-[var(--line)] bg-transparent text-[var(--ink)] hover:bg-[var(--panel-2)]"
+            >
+              Keluar
+            </Button>
+          </form>
         </div>
         <main className="flex-1 min-h-0">{children}</main>
       </div>

@@ -22,15 +22,17 @@ export async function funnelCounts(sql: Sql, now: Date = new Date()): Promise<Fu
     posted_this_week: string;
   }>(
     `select
-       (select count(*)::int from topics where discovered_at > $1 - interval '24 hours') as arrived24h,
+       (select count(*)::int from topics where discovered_at > ($1::timestamptz - interval '24 hours')) as arrived24h,
        (select count(*)::int from topics where state = 'new') as waiting_score,
-       (select count(*)::int from topics where state = 'passed' and scored_at > $1 - interval '24 hours') as passed24h,
+       (select count(*)::int from topics where state = 'passed' and scored_at > ($1::timestamptz - interval '24 hours')) as passed24h,
        (select count(*)::int from topics where state = 'passed') as waiting_draft,
        (select count(*)::int from drafts where status = 'needs_review') as needs_review,
        (select count(*)::int from drafts where status = 'scheduled') as scheduled,
        (select count(*)::int from drafts
          where status = 'posted'
-           and (posted_at at time zone '${TIME_ZONE}') >= date_trunc('week', ($1 at time zone '${TIME_ZONE}'))) as posted_this_week`,
+           and posted_at is not null
+           and (posted_at at time zone '${TIME_ZONE}') >= date_trunc('week', ($1::timestamptz at time zone '${TIME_ZONE}'))
+           and (posted_at at time zone '${TIME_ZONE}') < date_trunc('week', ($1::timestamptz at time zone '${TIME_ZONE}')) + interval '7 days') as posted_this_week`,
     [now],
   );
   const row = rows[0];
