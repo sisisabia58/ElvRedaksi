@@ -77,4 +77,59 @@ describe("publisher", () => {
     const items = await weekItems(sql, new Date("2026-10-26T00:00:00Z"));
     expect(items).toHaveLength(1);
   });
+
+  it("finishes a posting draft that already has an Instagram media id without publishing again", async () => {
+    const sql = await createTestSql();
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+      "11111111-1111-1111-1111-111111111111",
+      "Iklan",
+      "https://news.example/b",
+    ]);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, ig_media_id, story_media_id, story_error)
+       values ($1,$2,'posting','teaser_bio','serif',$3::jsonb,'Dari Contoh','[]'::jsonb,'[]'::jsonb,'alrdy','already','story-1','cerita gagal')`,
+      [
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+        JSON.stringify([
+          { role: "cover", kicker: "AI", headline: "Iklan baru bisa nyamar", body: "Pembuka." },
+          { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke Contoh." },
+        ]),
+      ],
+    );
+    let publishCalls = 0;
+    const now = new Date("2026-10-28T02:00:00Z");
+    await runPublisher({
+      sql,
+      payload: { draftId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2" },
+      manual: false,
+      now,
+      publisher: {
+        async publish() {
+          publishCalls += 1;
+          throw new Error("publish must not be called");
+        },
+      },
+    });
+    const row = await sql.rows<{
+      status: string;
+      ig_media_id: string;
+      story_media_id: string | null;
+      story_error: string | null;
+      posted_at: Date | string;
+    }>("select status, ig_media_id, story_media_id, story_error, posted_at from drafts");
+    expect(publishCalls).toBe(0);
+    expect(row[0].status).toBe("posted");
+    expect(row[0].ig_media_id).toBe("already");
+    expect(row[0].story_media_id).toBe("story-1");
+    expect(row[0].story_error).toBe("cerita gagal");
+    expect(new Date(row[0].posted_at).toISOString()).toBe(now.toISOString());
+  });
 });

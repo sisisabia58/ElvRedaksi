@@ -738,11 +738,15 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     public_base_url: string | null;
     ig_user_id: string | null;
     access_token: string | null;
+    ig_media_id: string | null;
+    story_media_id: string | null;
+    story_error: string | null;
   }>(
     `select d.status, d.caption, d.hashtags, d.slides, d.format, d.share_to_story,
             t.url as topic_url, s.name as source_name,
             b.public_base_url,
-            i.ig_user_id, i.access_token
+            i.ig_user_id, i.access_token,
+            d.ig_media_id, d.story_media_id, d.story_error
      from drafts d
      join topics t on t.id = d.topic_id
      join sources s on s.id = t.source_id
@@ -772,6 +776,15 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     }
   } else if (draft.status !== "posting") {
     throw new Error("publish requires human approval");
+  }
+
+  if (draft.ig_media_id != null) {
+    await finishPostingDraft(ctx, draftId, {
+      mediaId: draft.ig_media_id,
+      storyMediaId: draft.story_media_id,
+      storyError: draft.story_error,
+    });
+    return;
   }
 
   if (process.env.META_PROVIDER === "meta" && draft.access_token == null) {
@@ -822,6 +835,28 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     return;
   }
 
+  const saved = await ctx.sql.rows<{ id: string }>(
+    `update drafts
+     set ig_media_id = $1, story_media_id = $2, story_error = $3, updated_at = $4
+     where id = $5 and status = 'posting'
+     returning id`,
+    [result.mediaId, result.storyMediaId, result.storyError, ctx.now, draftId],
+  );
+  if (saved.length === 0) {
+    throw new Error("Status draf sudah berubah");
+  }
+  await finishPostingDraft(ctx, draftId, {
+    mediaId: result.mediaId,
+    storyMediaId: result.storyMediaId,
+    storyError: result.storyError,
+  });
+}
+
+async function finishPostingDraft(
+  ctx: JobCtx,
+  draftId: string,
+  result: PublishResult,
+): Promise<void> {
   assertTransition("worker", "posting", "posted");
   const posted = await ctx.sql.rows<{ id: string }>(
     `update drafts
