@@ -6,6 +6,29 @@ export interface LlmProvider {
   complete(req: LlmRequest): Promise<LlmResult>;
 }
 
+function demoCopyPayload(user: string): Record<string, unknown> {
+  const judulMatch = user.match(/^Judul: (.+)$/m);
+  const sumberMatch = user.match(/^Sumber: (.+)$/m);
+  const headline = judulMatch?.[1] ?? "Iklan baru bisa nyamar jadi fitur";
+  const sourceName = sumberMatch?.[1] ?? "Contoh";
+  return {
+    slides: [
+      { role: "cover", kicker: "AI", headline, body: "Satu kalimat pembuka." },
+      { role: "point", kicker: "Fakta", headline: "Uji coba dibuka minggu ini", body: "Berlaku di beberapa akun." },
+      { role: "point", kicker: "Dampak", headline: "Tim konten harus cek sumber", body: "Jangan bagikan ulang mentah." },
+      {
+        role: "cta",
+        kicker: "Sumber",
+        headline: "Baca lengkapnya di link bio",
+        body: `Artikel asli ada di ${sourceName}.`,
+      },
+    ],
+    caption: `Ringkasan dari ${sourceName}. Ini bukan artikel aslinya.`,
+    hashtags: ["iklan", "medsos", "sumber"],
+    altHeadlines: ["Fitur baru, atau iklan?", "Cek dulu sebelum dibagikan"],
+  };
+}
+
 function demoScorePayload(user: string): Record<string, unknown> {
   const low = user.includes("FIXTURE:low");
   const sensitive = user.includes("FIXTURE:sensitive");
@@ -35,7 +58,11 @@ export class DemoLlm implements LlmProvider {
         model: "demo",
       };
     }
-    return { text: "{}", costUsd: 0.01, model: "demo" };
+    return {
+      text: JSON.stringify(demoCopyPayload(req.user)),
+      costUsd: 0.01,
+      model: "demo",
+    };
   }
 }
 

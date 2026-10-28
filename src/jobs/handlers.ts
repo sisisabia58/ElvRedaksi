@@ -1,6 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { analystSystem } from "../agents/prompts";
+import { randomBytes, randomUUID } from "node:crypto";
+import { parseCopy } from "../agents/copywriter";
+import { analystSystem, copySystem } from "../agents/prompts";
 import { scoreTopic } from "../agents/analyst";
+import { makeShortCode } from "../domain/code";
 import { PASS_THRESHOLD_DEFAULT, SCOUT_INTERVAL_MS } from "../domain/constants";
 import { totalScore, verdict } from "../domain/score";
 import { createLlm, type LlmProvider } from "../llm/provider";
@@ -296,7 +298,195 @@ export async function runAnalyst(ctx: AnalystCtx): Promise<void> {
   }
 }
 
-export async function runCopywriter(_ctx: JobCtx): Promise<void> {}
+export type CopywriterCtx = JobCtx & { llm?: LlmProvider };
+
+function isUniqueViolation(error: unknown): boolean {
+  if (error && typeof error === "object") {
+    const code = (error as { code?: string }).code;
+    if (code === "23505") {
+      return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (/unique/i.test(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function loadBrandDefaults(sql: JobCtx["sql"]): Promise<{ format: string; template: string }> {
+  const rows = await sql.rows<{ default_format: string; default_template: string }>(
+    "select default_format, default_template from brand where id = 1",
+  );
+  return {
+    format: rows[0]?.default_format ?? "teaser_bio",
+    template: rows[0]?.default_template ?? "serif",
+  };
+}
+
+export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
+  const llm = ctx.llm ?? createLlm();
+  const topicId = ctx.payload.topicId;
+  if (typeof topicId !== "string" || !topicId) {
+    return;
+  }
+
+  const topics = await ctx.sql.rows<{
+    id: string;
+    title: string;
+    url: string;
+    summary: string;
+    excerpt: string;
+    published_at: Date | null;
+    state: string;
+    source_name: string;
+  }>(
+    `select t.id, t.title, t.url, t.summary, t.excerpt, t.published_at, t.state, s.name as source_name
+     from topics t
+     join sources s on s.id = t.source_id
+     where t.id = $1`,
+    [topicId],
+  );
+  const topic = topics[0];
+  if (!topic) {
+    throw new Error("topik tidak ditemukan");
+  }
+
+  const force = ctx.payload.force === true;
+  if ((topic.state === "skipped" || topic.state === "failed") && !force) {
+    return;
+  }
+
+  const brain = await loadBrain(ctx.sql);
+  const user = [
+    `Judul: ${topic.title}`,
+    `URL: ${topic.url}`,
+    `Sumber: ${topic.source_name}`,
+    `Diterbitkan: ${formatPublished(topic.published_at)}`,
+    `Ringkasan: ${topic.summary}`,
+    `Cuplikan: ${topic.excerpt}`,
+  ].join("\n");
+
+  const result = await llm.complete({
+    purpose: "copy",
+    system: copySystem(brain),
+    user,
+  });
+
+  await ctx.sql.rows(
+    `insert into llm_spend (id, agent, model, cost_usd) values ($1, $2, $3, $4)`,
+    [randomUUID(), "copywriter", result.model, result.costUsd],
+  );
+
+  let copy: ReturnType<typeof parseCopy>;
+  try {
+    copy = parseCopy(result.text, topic.source_name);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "naskah tidak valid";
+    await ctx.sql.rows(`update topics set state = 'failed', error = $1 where id = $2`, [message, topicId]);
+    await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+      randomUUID(),
+      "copywriter",
+      `Gagal menulis "${topic.title}"`,
+    ]);
+    return;
+  }
+
+  const rewrite = ctx.payload.rewrite === true;
+  const existingDrafts = await ctx.sql.rows<{ id: string }>(
+    "select id from drafts where topic_id = $1 limit 1",
+    [topicId],
+  );
+  const existingDraft = existingDrafts[0];
+
+  if (rewrite && existingDraft) {
+    await ctx.sql.rows(
+      `update drafts set
+         slides = $1::jsonb,
+         caption = $2,
+         hashtags = $3::jsonb,
+         alt_headlines = $4::jsonb,
+         text_dirty = true,
+         updated_at = $5
+       where id = $6`,
+      [
+        JSON.stringify(copy.slides),
+        copy.caption,
+        JSON.stringify(copy.hashtags),
+        JSON.stringify(copy.altHeadlines),
+        ctx.now,
+        existingDraft.id,
+      ],
+    );
+    await ctx.sql.rows(`update topics set state = 'drafted', error = null where id = $1`, [topicId]);
+    const coverHeadline = copy.slides[0]?.headline ?? topic.title;
+    await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+      randomUUID(),
+      "copywriter",
+      `Draft siap: "${coverHeadline}"`,
+    ]);
+    await enqueue(ctx.sql, {
+      name: "designer.render",
+      payload: { draftId: existingDraft.id },
+      runAt: ctx.now,
+      manual: ctx.manual,
+    });
+    return;
+  }
+
+  const brand = await loadBrandDefaults(ctx.sql);
+  const slidesJson = JSON.stringify(copy.slides);
+  let draftId: string | null = null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const id = randomUUID();
+    const shortCode = makeShortCode(randomBytes(5));
+    try {
+      await ctx.sql.rows(
+        `insert into drafts (
+           id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, focal_y, short_code, manual
+         ) values ($1, $2, 'drafted', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, 50, $9, $10)`,
+        [
+          id,
+          topicId,
+          brand.format,
+          brand.template,
+          slidesJson,
+          copy.caption,
+          JSON.stringify(copy.hashtags),
+          JSON.stringify(copy.altHeadlines),
+          shortCode,
+          ctx.manual,
+        ],
+      );
+      draftId = id;
+      break;
+    } catch (error) {
+      if (isUniqueViolation(error) && attempt < 4) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!draftId) {
+    throw new Error("gagal membuat short_code unik");
+  }
+
+  await ctx.sql.rows(`update topics set state = 'drafted', error = null where id = $1`, [topicId]);
+  const coverHeadline = copy.slides[0]?.headline ?? topic.title;
+  await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+    randomUUID(),
+    "copywriter",
+    `Draft siap: "${coverHeadline}"`,
+  ]);
+  await enqueue(ctx.sql, {
+    name: "designer.render",
+    payload: { draftId },
+    runAt: ctx.now,
+    manual: ctx.manual,
+  });
+}
 
 export async function runDesigner(_ctx: JobCtx): Promise<void> {}
 
