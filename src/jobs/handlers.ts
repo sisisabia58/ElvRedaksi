@@ -33,6 +33,14 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
       const items = parseFeed(xml);
 
       for (const item of items) {
+        const known = await ctx.sql.rows<{ id: string }>(
+          `select id from topics where url = $1 limit 1`,
+          [item.url],
+        );
+        if (known.length > 0) {
+          continue;
+        }
+
         let excerpt = "";
         try {
           await assertPublicFetchUrl(item.url);

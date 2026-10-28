@@ -62,7 +62,13 @@ export async function setSourceEnabled(
 
 export async function deleteSource(sql: Sql, role: Role, id: string): Promise<void> {
   requireSourceWrite(role);
-  await sql.rows(`delete from sources where id = $1`, [id]);
+  await sql.tx(async (tx) => {
+    await tx.rows(
+      `delete from drafts where topic_id in (select id from topics where source_id = $1)`,
+      [id],
+    );
+    await tx.rows(`delete from sources where id = $1`, [id]);
+  });
 }
 
 export async function listSources(sql: Sql): Promise<SourceRow[]> {

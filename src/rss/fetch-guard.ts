@@ -192,7 +192,7 @@ function isBlockedIpAddress(address: string): boolean {
   return true;
 }
 
-async function resolveHostAddresses(hostname: string): Promise<string[]> {
+async function resolveHostAddresses(hostname: string, timeoutMs: number): Promise<string[]> {
   const host = stripBrackets(hostname).toLowerCase();
   if (host === "localhost") {
     return ["127.0.0.1"];
@@ -201,17 +201,25 @@ async function resolveHostAddresses(hostname: string): Promise<string[]> {
   if (literalKind === 4 || literalKind === 6) {
     return [host];
   }
-  const results = await dnsLookupPromises(host, { all: true, verbatim: true });
-  if (results.length === 0) {
-    throw new Error(DNS_FETCH_MESSAGE);
-  }
-  return results.map((entry) => entry.address);
+  const lookup = dnsLookupPromises(host, { all: true, verbatim: true }).then((results) => {
+    if (results.length === 0) {
+      throw new Error(DNS_FETCH_MESSAGE);
+    }
+    return results.map((entry) => entry.address);
+  });
+  const timedOut = new Promise<string[]>((_, reject) => {
+    setTimeout(() => reject(new Error(DNS_FETCH_MESSAGE)), timeoutMs);
+  });
+  return Promise.race([lookup, timedOut]);
 }
 
-export async function resolveAllowedFetchAddresses(hostname: string): Promise<string[]> {
+export async function resolveAllowedFetchAddresses(
+  hostname: string,
+  timeoutMs = 8000,
+): Promise<string[]> {
   let addresses: string[];
   try {
-    addresses = await resolveHostAddresses(hostname);
+    addresses = await resolveHostAddresses(hostname, timeoutMs);
   } catch (error) {
     if (error instanceof Error && error.message === DNS_FETCH_MESSAGE) {
       throw error;
@@ -243,7 +251,7 @@ export async function isBlockedFetchTarget(url: string): Promise<boolean> {
   }
 }
 
-export async function assertPublicFetchUrl(url: string): Promise<void> {
+export async function assertPublicFetchUrl(url: string, timeoutMs = 8000): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -254,7 +262,7 @@ export async function assertPublicFetchUrl(url: string): Promise<void> {
     throw new Error("URL tidak valid.");
   }
   try {
-    await resolveAllowedFetchAddresses(parsed.hostname);
+    await resolveAllowedFetchAddresses(parsed.hostname, timeoutMs);
   } catch (error) {
     if (error instanceof Error) {
       throw error;
@@ -330,12 +338,12 @@ async function readResponseTextLimited(
 async function fetchPinnedUrl(
   url: string,
   timeoutMs: number,
+  hostname: string,
+  addresses: string[],
 ): Promise<{ response: Awaited<ReturnType<typeof undiciFetch>>; close: () => Promise<void> }> {
-  const parsed = new URL(url);
-  const addresses = await resolveAllowedFetchAddresses(parsed.hostname);
   const dispatcher = new Agent({
     connect: {
-      lookup: createPinnedLookup(parsed.hostname, addresses),
+      lookup: createPinnedLookup(hostname, addresses),
     },
   });
   try {
@@ -357,8 +365,17 @@ async function fetchPinnedUrl(
 export async function fetchPublicText(url: string, timeoutMs: number): Promise<string> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    await assertPublicFetchUrl(current);
-    const { response, close } = await fetchPinnedUrl(current, timeoutMs);
+    let parsed: URL;
+    try {
+      parsed = new URL(current);
+    } catch {
+      throw new Error("URL tidak valid.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("URL tidak valid.");
+    }
+    const addresses = await resolveAllowedFetchAddresses(parsed.hostname, timeoutMs);
+    const { response, close } = await fetchPinnedUrl(current, timeoutMs, parsed.hostname, addresses);
     try {
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");

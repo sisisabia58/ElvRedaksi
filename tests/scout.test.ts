@@ -3,7 +3,7 @@ import { parseFeed } from "../src/rss/parse";
 import { excerptFromHtml } from "../src/rss/excerpt";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
-import { addSource, listSources } from "../src/studio/sources";
+import { addSource, deleteSource, listSources } from "../src/studio/sources";
 import { jobHandlers, runScout } from "../src/jobs/handlers";
 import { enqueue, runDueJobs } from "../src/jobs/runner";
 import { isBlockedFetchTarget, createPinnedLookup, PRIVATE_FETCH_MESSAGE } from "../src/rss/fetch-guard";
@@ -148,5 +148,67 @@ describe("scout", () => {
     });
     expect(results[0]?.address).toBe(pinned);
     expect(results[0]?.family).toBe(4);
+  });
+
+  it("does not fetch article pages for topic urls that already exist", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await addSource(sql, "admin", { name: "Contoh", url: "https://203.0.113.1/feed", lang: "ID" });
+    let pageFetches = 0;
+    await runScout({
+      sql,
+      payload: {},
+      manual: true,
+      now: new Date("2026-10-28T01:00:00Z"),
+      fetchFeed: async () => xml,
+      fetchPage: async () => {
+        pageFetches += 1;
+        return "<p>Fakta dari sumber.</p>";
+      },
+    });
+    expect(pageFetches).toBe(1);
+    await runScout({
+      sql,
+      payload: {},
+      manual: true,
+      now: new Date("2026-10-28T01:20:00Z"),
+      fetchFeed: async () => xml,
+      fetchPage: async () => {
+        pageFetches += 1;
+        throw new Error("should not refetch known article");
+      },
+    });
+    expect(pageFetches).toBe(1);
+  });
+
+  it("deletes a source after topics have drafts", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const sourceId = "11111111-1111-1111-1111-111111111111";
+    const topicId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      sourceId,
+      "Contoh",
+      "https://203.0.113.1/feed",
+      "ID",
+    ]);
+    await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
+      topicId,
+      sourceId,
+      "Judul",
+      "https://203.0.113.1/a",
+    ]);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
+       values ($1,$2,'drafted','teaser_bio','serif','[]'::jsonb,'c','[]'::jsonb,'[]'::jsonb,$3)`,
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", topicId, "code1"],
+    );
+    await deleteSource(sql, "admin", sourceId);
+    const sources = await sql.rows<{ id: string }>("select id from sources where id = $1", [sourceId]);
+    const topics = await sql.rows<{ id: string }>("select id from topics where source_id = $1", [sourceId]);
+    const drafts = await sql.rows<{ id: string }>("select id from drafts where topic_id = $1", [topicId]);
+    expect(sources).toHaveLength(0);
+    expect(topics).toHaveLength(0);
+    expect(drafts).toHaveLength(0);
   });
 });
