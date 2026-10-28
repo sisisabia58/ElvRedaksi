@@ -44,3 +44,40 @@ export function assertTransition(
     throw new Error("manual flag required");
   }
 }
+
+export type ReviewAction =
+  | "approve"
+  | "schedule"
+  | "reject"
+  | "post_now"
+  | "posted_manual"
+  | "retry"
+  | "delete";
+
+export function humanTransitionAllowed(from: DraftStatus, to: DraftStatus, manual = false): boolean {
+  try {
+    assertTransition("human", from, to, manual);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function reviewActionVisible(status: DraftStatus, action: ReviewAction): boolean {
+  switch (action) {
+    case "approve":
+      return humanTransitionAllowed(status, "approved");
+    case "schedule":
+      return humanTransitionAllowed(status, "scheduled");
+    case "reject":
+      return humanTransitionAllowed(status, "rejected");
+    case "post_now":
+      return humanTransitionAllowed(status, "posting");
+    case "posted_manual":
+      return humanTransitionAllowed(status, "posted", true);
+    case "retry":
+      return status === "failed";
+    case "delete":
+      return status !== "posting";
+  }
+}

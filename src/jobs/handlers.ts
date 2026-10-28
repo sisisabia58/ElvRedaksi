@@ -12,7 +12,7 @@ import { createLlm, type LlmProvider } from "../llm/provider";
 import { fetchPublicText } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
-import { cancelUnfinishedPublishJobs } from "../studio/drafts";
+import { validateCoverPhotoDataUrl, withLockedDraftEdit } from "../studio/drafts";
 import { enqueue, type JobCtx } from "./runner";
 
 export type ScoutCtx = JobCtx & {
@@ -328,6 +328,26 @@ async function loadBrandDefaults(sql: JobCtx["sql"]): Promise<{ format: string; 
   };
 }
 
+function slidesKeepingCoverPhoto(nextSlides: Slide[], stored: unknown): Slide[] {
+  const parsed = (typeof stored === "string" ? JSON.parse(stored) : stored) as (Slide & {
+    photoDataUrl?: string;
+  })[];
+  if (!Array.isArray(parsed)) {
+    return nextSlides;
+  }
+  const cover = parsed.find((slide) => slide.role === "cover") ?? parsed[0];
+  const raw = cover?.photoDataUrl;
+  if (typeof raw !== "string" || raw.length === 0) {
+    return nextSlides;
+  }
+  try {
+    const photo = validateCoverPhotoDataUrl(raw);
+    return nextSlides.map((slide) => (slide.role === "cover" ? { ...slide, photoDataUrl: photo } : slide));
+  } catch {
+    return nextSlides;
+  }
+}
+
 export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   const llm = ctx.llm ?? createLlm();
   const topicId = ctx.payload.topicId;
@@ -404,51 +424,36 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   const existingDraft = existingDrafts[0];
 
   if (rewrite && existingDraft) {
-    await ctx.sql.tx(async (tx) => {
-      const fresh = await tx.rows<{ status: DraftStatus }>("select status from drafts where id = $1", [
-        existingDraft.id,
-      ]);
-      const status = fresh[0]?.status;
-      if (status && status !== "posting") {
-        await cancelUnfinishedPublishJobs(tx, existingDraft.id);
-      }
-      const values = [
-        JSON.stringify(copy.slides),
-        copy.caption,
-        JSON.stringify(copy.hashtags),
-        JSON.stringify(copy.altHeadlines),
-        ctx.now,
-        existingDraft.id,
-      ];
-      if (status === "scheduled") {
-        // WORKER_ALLOW has no scheduled -> needs_review edge. The rewrite still
-        // pulls the draft off the schedule with a direct update.
-        await tx.rows(
+    const applied = await ctx.sql.tx(async (tx) => {
+      return withLockedDraftEdit(tx, existingDraft.id, "rewrite", async (locked, nextStatus) => {
+        const slides = slidesKeepingCoverPhoto(copy.slides, locked.slides);
+        return tx.rows<{ id: string }>(
           `update drafts set
              slides = $1::jsonb,
              caption = $2,
              hashtags = $3::jsonb,
              alt_headlines = $4::jsonb,
              text_dirty = true,
-             status = 'needs_review',
-             updated_at = $5
-           where id = $6 and status = 'scheduled'`,
-          values,
+             status = $5,
+             updated_at = $6
+           where id = $7 and status = $8
+           returning id`,
+          [
+            JSON.stringify(slides),
+            copy.caption,
+            JSON.stringify(copy.hashtags),
+            JSON.stringify(copy.altHeadlines),
+            nextStatus,
+            ctx.now,
+            existingDraft.id,
+            locked.status,
+          ],
         );
-        return;
-      }
-      await tx.rows(
-        `update drafts set
-           slides = $1::jsonb,
-           caption = $2,
-           hashtags = $3::jsonb,
-           alt_headlines = $4::jsonb,
-           text_dirty = true,
-           updated_at = $5
-         where id = $6`,
-        values,
-      );
+      });
     });
+    if (!applied) {
+      return;
+    }
     await ctx.sql.rows(`update topics set state = 'drafted', error = null where id = $1`, [topicId]);
     const coverHeadline = copy.slides[0]?.headline ?? topic.title;
     await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
@@ -604,7 +609,11 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await ctx.sql.rows(`update drafts set error = $1 where id = $2`, [message, draftId]);
+      await ctx.sql.rows(`update drafts set error = $1 where id = $2 and updated_at = $3`, [
+        message,
+        draftId,
+        startedAt,
+      ]);
       throw error;
     }
   } finally {

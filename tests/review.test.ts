@@ -7,7 +7,10 @@ import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "../src/stud
 import {
   adoptServerDraft,
   editorPublishBlocked,
+  editorTextFields,
   focalSliderIsUnsaved,
+  readPreviewFields,
+  writePreviewFields,
   type EditorTextFields,
 } from "../src/studio/editor-sync";
 import {
@@ -27,6 +30,7 @@ import {
   scheduleDraft,
   setTemplate,
 } from "../src/studio/drafts";
+import type { Sql } from "../src/db/client";
 import { enqueue } from "../src/jobs/runner";
 
 const DRAFT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
@@ -465,6 +469,104 @@ describe("review", () => {
       [DRAFT_ID],
     );
     expect(jobs).toHaveLength(1);
+  });
+
+  it("does not cancel the publisher when a locked text save matches no row", async () => {
+    const statements: string[] = [];
+    const slides = [{ role: "cover" as const, kicker: "AI", headline: "Judul cukup panjang", body: "Isi." }];
+    const fake: Sql = {
+      async rows<T>(text: string): Promise<T[]> {
+        statements.push(text);
+        if (/^\s*select/i.test(text)) {
+          return [
+            {
+              id: DRAFT_ID,
+              status: "scheduled",
+              format: "teaser_bio",
+              template: "serif",
+              slides,
+              focal_y: 50,
+            },
+          ] as T[];
+        }
+        return [] as T[];
+      },
+      async tx(fn) {
+        return fn(fake);
+      },
+    };
+    await saveDraftText(fake, "social_media", DRAFT_ID, {
+      slides,
+      caption: "Dari Contoh.",
+      hashtags: ["iklan"],
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+      kicker: "AI",
+    });
+    expect(statements.some((sql) => /for update/i.test(sql))).toBe(true);
+    const update = statements.find((sql) => /update drafts/i.test(sql));
+    expect(update).toMatch(/where id = \$\d+ and status = \$\d+/i);
+    expect(statements.some((sql) => /delete from jobs/i.test(sql))).toBe(false);
+  });
+
+  it("binds kicker, headline, and body to the preview slide and leaves the others", () => {
+    const cover = { role: "cover" as const, kicker: "AI", headline: "Judul cover cukup", body: "Cover." };
+    const point = { role: "point" as const, kicker: "Fakta", headline: "Poin yang sedang tampil", body: "Detail poin." };
+    const pointTwo = { role: "point" as const, kicker: "Dampak", headline: "Poin kedua cukup", body: "Detail dua." };
+    const cta = { role: "cta" as const, kicker: "Sumber", headline: "Baca lengkapnya di bio", body: "Ke Contoh." };
+    const slides = [cover, point, pointTwo, cta];
+    const draft = {
+      slides,
+      format: "carousel_full" as const,
+      caption: "Caption dari Contoh.",
+      hashtags: ["iklan"],
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"] as [string, string],
+    };
+    expect(readPreviewFields("carousel_full", slides, 1)).toEqual({
+      kicker: point.kicker,
+      headline: point.headline,
+      body: point.body,
+    });
+    expect(editorTextFields(draft, 1).headline).toBe(point.headline);
+    const savedPoint = writePreviewFields("carousel_full", slides, 1, {
+      kicker: "Fakta",
+      headline: "Poin sudah dikoreksi",
+      body: "Detail baru.",
+    });
+    expect(savedPoint[0]).toEqual(cover);
+    expect(savedPoint[2]).toEqual(pointTwo);
+    expect(savedPoint[3]).toEqual(cta);
+    expect(savedPoint[1]).toMatchObject({ headline: "Poin sudah dikoreksi", body: "Detail baru." });
+
+    expect(readPreviewFields("teaser_bio", slides, 1).headline).toBe(cta.headline);
+    const savedCta = writePreviewFields("teaser_bio", slides, 1, {
+      kicker: cta.kicker,
+      headline: "CTA yang dikoreksi",
+      body: cta.body,
+    });
+    expect(savedCta[1]).toEqual(point);
+    expect(savedCta[2]).toEqual(pointTwo);
+    expect(savedCta[0]).toEqual(cover);
+    expect(savedCta[3].headline).toBe("CTA yang dikoreksi");
+
+    const previous = editorTextFields(draft, 1);
+    const nextSlides = [
+      { ...cover, headline: "Cover dari server" },
+      { ...point, kicker: "Baru", headline: "Poin dari server", body: "Server." },
+      pointTwo,
+      cta,
+    ];
+    const next = editorTextFields({ ...draft, slides: nextSlides }, 1);
+    expect(adoptServerDraft(previous, previous, next, { format: "carousel_full", index: 1 })).toMatchObject({
+      kicker: "Baru",
+      headline: "Poin dari server",
+      body: "Server.",
+    });
+    const dirty = { ...previous, headline: "Sedang saya ketik poin" };
+    const adopted = adoptServerDraft(previous, dirty, next, { format: "carousel_full", index: 1 });
+    expect(adopted.headline).toBe("Sedang saya ketik poin");
+    expect(adopted.kicker).toBe("Baru");
+    expect(adopted.body).toBe("Server.");
+    expect(adopted.headline).not.toBe(nextSlides[0].headline);
   });
 
   it("adopts a server rewrite when local fields are unchanged and keeps dirty ones", () => {

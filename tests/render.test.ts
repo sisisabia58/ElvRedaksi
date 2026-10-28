@@ -310,6 +310,35 @@ describe("designer", () => {
     await expectPriorAssets(sql);
   });
 
+  it("does not stamp a raster error onto a row that changed during the failure", async () => {
+    const sql = await seedDesignerDraft("needs_review");
+    await insertPriorAssets(sql);
+    await expect(
+      runDesigner({
+        sql,
+        payload: { draftId: DRAFT_ID },
+        manual: true,
+        now: new Date(),
+        rasterizer: {
+          async toPng() {
+            await sql.rows(
+              `update drafts set updated_at = updated_at + interval '1 second', text_dirty = true where id = $1`,
+              [DRAFT_ID],
+            );
+            throw new Error("raster failed late");
+          },
+        },
+      }),
+    ).rejects.toThrow(/raster failed late/);
+    const status = await sql.rows<{ error: string | null; text_dirty: boolean; status: string }>(
+      "select error, text_dirty, status from drafts",
+    );
+    expect(status[0]).toMatchObject({ error: null, text_dirty: true, status: "needs_review" });
+    const log = await sql.rows("select id from activity where agent = 'designer'");
+    expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
+  });
+
   it("keeps previous assets when the rasterizer throws", async () => {
     const sql = await seedDesignerDraft("drafted");
     await insertPriorAssets(sql);

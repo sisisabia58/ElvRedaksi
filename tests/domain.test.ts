@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertTransition } from "../src/domain/status";
+import { assertTransition, reviewActionVisible } from "../src/domain/status";
 import { greeting, isWithinWorkHours } from "../src/domain/time";
 import { totalScore, verdict } from "../src/domain/score";
 import { deltaPct, engagementRate, formatUsd } from "../src/domain/metrics";
@@ -23,6 +23,20 @@ describe("draft gate", () => {
     expect(() => assertTransition("worker", "approved", "scheduled")).toThrow(
       /publish requires human approval/,
     );
+  });
+
+  it("hides review actions the status machine rejects and still offers retry from failed", () => {
+    expect(reviewActionVisible("failed", "approve")).toBe(false);
+    expect(reviewActionVisible("failed", "schedule")).toBe(false);
+    expect(reviewActionVisible("failed", "reject")).toBe(false);
+    expect(reviewActionVisible("failed", "posted_manual")).toBe(false);
+    expect(reviewActionVisible("failed", "retry")).toBe(true);
+    expect(reviewActionVisible("failed", "delete")).toBe(true);
+    expect(reviewActionVisible("posting", "delete")).toBe(false);
+    expect(reviewActionVisible("needs_review", "approve")).toBe(true);
+    expect(reviewActionVisible("needs_review", "posted_manual")).toBe(true);
+    expect(reviewActionVisible("approved", "post_now")).toBe(true);
+    expect(reviewActionVisible("posted", "approve")).toBe(false);
   });
 
   it("requires the manual flag to skip the API", () => {

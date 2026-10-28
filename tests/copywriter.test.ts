@@ -105,4 +105,58 @@ describe("copywriter", () => {
     );
     expect(jobs).toHaveLength(0);
   });
+
+  it("keeps a valid cover photo data url when a rewrite replaces the slides", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const topicId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    const photo = `data:image/png;base64,${Buffer.from("png-photo").toString("base64")}`;
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, state, score) values ($1,$2,$3,$4,'drafted',80)",
+      [topicId, "11111111-1111-1111-1111-111111111111", "Iklan baru", "https://news.example/a"],
+    );
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
+       values ($1,$2,'needs_review','teaser_bio','serif',$3::jsonb,'Caption lama dari Contoh.',$4::jsonb,$5::jsonb,'photo')`,
+      [
+        draftId,
+        topicId,
+        JSON.stringify([
+          {
+            role: "cover",
+            kicker: "Lama",
+            headline: "Judul lama yang cukup",
+            body: "Lama.",
+            photoDataUrl: photo,
+          },
+          { role: "point", kicker: "Fakta", headline: "Poin lama yang cukup", body: "Detail." },
+          { role: "point", kicker: "Dampak", headline: "Poin dua yang cukup", body: "Detail." },
+          { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke Contoh." },
+        ]),
+        JSON.stringify(["lama"]),
+        JSON.stringify(["Alt lama satu", "Alt lama dua"]),
+      ],
+    );
+    await runCopywriter({
+      sql,
+      payload: { topicId, rewrite: true },
+      manual: true,
+      now: new Date("2026-10-28T02:00:00Z"),
+      llm: new DemoLlm(),
+    });
+    const rows = await sql.rows<{ slides: unknown }>("select slides from drafts where id = $1", [draftId]);
+    const slides = (
+      typeof rows[0].slides === "string" ? JSON.parse(rows[0].slides) : rows[0].slides
+    ) as { role: string; headline: string; photoDataUrl?: string }[];
+    expect(slides[0]).toMatchObject({ role: "cover", photoDataUrl: photo });
+    expect(slides[0].headline).not.toBe("Judul lama yang cukup");
+    expect(slides.some((slide) => slide.role !== "cover" && slide.photoDataUrl)).toBe(false);
+  });
 });

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import type { Slide } from "@/src/agents/copywriter";
+import type { DraftStatus } from "@/src/domain/status";
+import { reviewActionVisible } from "@/src/domain/status";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studio/cover-photo";
 import {
   adoptServerDraft,
@@ -11,6 +13,8 @@ import {
   editorPublishBlocked,
   editorTextFields,
   focalSliderIsUnsaved,
+  readPreviewFields,
+  writePreviewFields,
 } from "@/src/studio/editor-sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +40,7 @@ import {
 type DraftView = {
   id: string;
   topicId: string;
-  status: string;
+  status: DraftStatus;
   format: "carousel_full" | "teaser_bio";
   template: "stabilo" | "foto_penuh" | "serif" | "catatan";
   slides: Slide[];
@@ -80,10 +84,6 @@ function downloadSlideSrc(draft: DraftView, index: number): string {
   return `/review/${draft.id}/slide/${index}`;
 }
 
-function coverSlide(slides: Slide[]): Slide {
-  return slides.find((s) => s.role === "cover") ?? slides[0] ?? { role: "cover", kicker: "", headline: "", body: "" };
-}
-
 export function EditorPanel({
   draft,
   canPublish,
@@ -97,10 +97,11 @@ export function EditorPanel({
   const [pending, startTransition] = useTransition();
   const [previewTab, setPreviewTab] = useState<"render" | "focal">("render");
   const [slideIndex, setSlideIndex] = useState(0);
+  const initialFields = editorTextFields(draft, 0);
   const [slides, setSlides] = useState(draft.slides);
-  const [kicker, setKicker] = useState(coverSlide(draft.slides).kicker);
-  const [headline, setHeadline] = useState(coverSlide(draft.slides).headline);
-  const [body, setBody] = useState(coverSlide(draft.slides).body);
+  const [kicker, setKicker] = useState(initialFields.kicker);
+  const [headline, setHeadline] = useState(initialFields.headline);
+  const [body, setBody] = useState(initialFields.body);
   const [caption, setCaption] = useState(draft.caption);
   const [hashtagsText, setHashtagsText] = useState(draft.hashtags.join(", "));
   const [altHeadlines, setAltHeadlines] = useState(draft.altHeadlines);
@@ -111,14 +112,17 @@ export function EditorPanel({
   const [copyLabel, setCopyLabel] = useState("Copy caption + hashtag");
   const [error, setError] = useState<string | null>(null);
   const [blockedPhotoUrl, setBlockedPhotoUrl] = useState<string | null>(null);
-  const [serverBaseline, setServerBaseline] = useState(() => editorTextFields(draft));
+  const [serverBaseline, setServerBaseline] = useState(() => editorTextFields(draft, 0));
   const [seenUpdatedAt, setSeenUpdatedAt] = useState(draft.updatedAt);
+  const slideTotal = draft.slideCount;
+  const clampedIndex = Math.min(slideIndex, Math.max(slideTotal - 1, 0));
   if (draft.updatedAt !== seenUpdatedAt) {
-    const next = editorTextFields(draft);
+    const next = editorTextFields(draft, clampedIndex);
     const adopted = adoptServerDraft(
       serverBaseline,
       { slides, kicker, headline, body, caption, hashtagsText, altHeadlines },
       next,
+      { format: draft.format, index: clampedIndex },
     );
     setSlides(adopted.slides);
     setKicker(adopted.kicker);
@@ -131,28 +135,37 @@ export function EditorPanel({
     setSeenUpdatedAt(draft.updatedAt);
   }
 
-  const slideTotal = draft.slideCount;
-  const clampedIndex = Math.min(slideIndex, Math.max(slideTotal - 1, 0));
-
   const savePayload = useMemo(() => {
     const hashtags = hashtagsText
       .split(/[,\s]+/)
       .map((t) => t.replace(/^#/, "").trim())
       .filter(Boolean);
-    const updatedSlides = omitRejectedCoverPhoto(slides, blockedPhotoUrl).map((slide) => {
-      if (slide.role !== "cover") {
-        return slide;
-      }
-      return { ...slide, kicker, headline, body };
-    });
+    const updatedSlides = writePreviewFields(
+      draft.format,
+      omitRejectedCoverPhoto(slides, blockedPhotoUrl),
+      clampedIndex,
+      { kicker, headline, body },
+    );
+    const cover = updatedSlides.find((slide) => slide.role === "cover") ?? updatedSlides[0];
     return {
       slides: updatedSlides,
       caption,
       hashtags,
       altHeadlines,
-      kicker,
+      kicker: cover?.kicker ?? "",
     };
-  }, [slides, kicker, headline, body, caption, hashtagsText, altHeadlines, blockedPhotoUrl]);
+  }, [
+    slides,
+    kicker,
+    headline,
+    body,
+    caption,
+    hashtagsText,
+    altHeadlines,
+    blockedPhotoUrl,
+    draft.format,
+    clampedIndex,
+  ]);
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>, redirect?: string) {
     setError(null);
@@ -226,8 +239,6 @@ export function EditorPanel({
     window.setTimeout(() => setCopyLabel("Copy caption + hashtag"), 1600);
   }
 
-  const savedCover = coverSlide(draft.slides);
-
   const hasUnsavedTextEdits = useMemo(() => {
     const hashtags = hashtagsText
       .split(/[,\s]+/)
@@ -236,25 +247,51 @@ export function EditorPanel({
     const hashtagsMatch =
       hashtags.length === draft.hashtags.length &&
       hashtags.every((tag, i) => tag === draft.hashtags[i]);
-    return (
-      headline !== savedCover.headline ||
-      kicker !== savedCover.kicker ||
-      body !== savedCover.body ||
-      caption !== draft.caption ||
-      !hashtagsMatch
-    );
+    const edited = writePreviewFields(draft.format, slides, clampedIndex, { kicker, headline, body });
+    const textChanged =
+      edited.length !== draft.slides.length ||
+      edited.some((slide, index) => {
+        const saved = draft.slides[index];
+        return (
+          !saved ||
+          slide.kicker !== saved.kicker ||
+          slide.headline !== saved.headline ||
+          slide.body !== saved.body
+        );
+      });
+    return textChanged || caption !== draft.caption || !hashtagsMatch;
   }, [
     headline,
     kicker,
     body,
     caption,
     hashtagsText,
+    slides,
+    clampedIndex,
     draft.caption,
     draft.hashtags,
-    savedCover.headline,
-    savedCover.kicker,
-    savedCover.body,
+    draft.slides,
+    draft.format,
   ]);
+
+  function showPreview(nextIndex: number) {
+    const written = writePreviewFields(draft.format, slides, clampedIndex, { kicker, headline, body });
+    const bounded = Math.min(Math.max(nextIndex, 0), Math.max(slideTotal - 1, 0));
+    const text = readPreviewFields(draft.format, written, bounded);
+    setSlides(written);
+    setKicker(text.kicker);
+    setHeadline(text.headline);
+    setBody(text.body);
+    setSlideIndex(bounded);
+  }
+
+  const showApprove = canPublish && reviewActionVisible(draft.status, "approve");
+  const showSchedule = canPublish && reviewActionVisible(draft.status, "schedule");
+  const showReject = canWrite && reviewActionVisible(draft.status, "reject");
+  const showPostNow = canPublish && reviewActionVisible(draft.status, "post_now");
+  const showManual = canPublish && reviewActionVisible(draft.status, "posted_manual");
+  const showRetry = canPublish && reviewActionVisible(draft.status, "retry");
+  const showDelete = canWrite && reviewActionVisible(draft.status, "delete");
 
   function commitFocalFromInput(input: HTMLInputElement) {
     const value = clampedFocal(Number(input.value));
@@ -316,7 +353,7 @@ export function EditorPanel({
                   variant="outline"
                   size="sm"
                   disabled={clampedIndex <= 0}
-                  onClick={() => setSlideIndex((i) => Math.max(0, i - 1))}
+                  onClick={() => showPreview(clampedIndex - 1)}
                 >
                   ←
                 </Button>
@@ -328,7 +365,7 @@ export function EditorPanel({
                   variant="outline"
                   size="sm"
                   disabled={clampedIndex >= slideTotal - 1}
-                  onClick={() => setSlideIndex((i) => Math.min(slideTotal - 1, i + 1))}
+                  onClick={() => showPreview(clampedIndex + 1)}
                 >
                   →
                 </Button>
@@ -393,37 +430,39 @@ export function EditorPanel({
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            {canPublish ? (
-              <>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={pending || publishBlocked}
-                  onClick={() => run(() => postDraftNowAction(draft.id))}
-                >
-                  Posting sekarang
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={pending || publishBlocked}
-                  onClick={() => run(() => approveDraftAction(draft.id))}
-                >
-                  Setujui
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={pending || publishBlocked}
-                  onClick={() => run(() => markPostedManuallyAction(draft.id))}
-                >
-                  Sudah diposting manual
-                </Button>
-              </>
+            {showPostNow ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={pending || publishBlocked}
+                onClick={() => run(() => postDraftNowAction(draft.id))}
+              >
+                Posting sekarang
+              </Button>
             ) : null}
-            {canWrite ? (
+            {showApprove ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={pending || publishBlocked}
+                onClick={() => run(() => approveDraftAction(draft.id))}
+              >
+                Setujui
+              </Button>
+            ) : null}
+            {showManual ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={pending || publishBlocked}
+                onClick={() => run(() => markPostedManuallyAction(draft.id))}
+              >
+                Sudah diposting manual
+              </Button>
+            ) : null}
+            {showReject ? (
               <Button
                 type="button"
                 size="sm"
@@ -434,7 +473,7 @@ export function EditorPanel({
                 Tolak
               </Button>
             ) : null}
-            {canWrite ? (
+            {showDelete ? (
               <Button
                 type="button"
                 size="sm"
@@ -445,7 +484,7 @@ export function EditorPanel({
                 Hapus
               </Button>
             ) : null}
-            {canPublish && draft.status === "failed" ? (
+            {showRetry ? (
               <Button
                 type="button"
                 size="sm"
@@ -457,7 +496,7 @@ export function EditorPanel({
             ) : null}
           </div>
 
-          {canPublish ? (
+          {showSchedule ? (
             <div className="space-y-2">
               <p className="text-xs font-medium tracking-wide text-[var(--muted)] uppercase">
                 JADWAL POSTING (WIB)

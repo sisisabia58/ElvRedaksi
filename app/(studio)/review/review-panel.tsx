@@ -6,7 +6,7 @@ import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { DraftStatus } from "@/src/domain/status";
+import { reviewActionVisible, type DraftStatus } from "@/src/domain/status";
 import { bulkApproveAction, bulkRejectAction, bulkScheduleAction } from "./actions";
 
 export type ReviewCardView = {
@@ -77,6 +77,9 @@ export function ReviewPanel({
   }
 
   const selectedIds = [...selected];
+  const selectedCards = cards.filter((card) => selected.has(card.id));
+  const bulkAllows = (action: "approve" | "schedule" | "reject") =>
+    selectedCards.every((card) => reviewActionVisible(card.status, action));
 
   return (
     <div className="p-6 md:p-8 space-y-6 pb-28">
@@ -185,7 +188,7 @@ export function ReviewPanel({
             <>
               <Button
                 type="button"
-                disabled={pending}
+                disabled={pending || !bulkAllows("approve")}
                 onClick={() => run(() => bulkApproveAction(selectedIds))}
               >
                 Setujui
@@ -200,7 +203,7 @@ export function ReviewPanel({
                 <Button
                   type="button"
                   variant="secondary"
-                  disabled={pending || !scheduleAt}
+                  disabled={pending || !scheduleAt || !bulkAllows("schedule")}
                   onClick={() => run(() => bulkScheduleAction(selectedIds, scheduleAt))}
                 >
                   Jadwalkan
@@ -212,7 +215,7 @@ export function ReviewPanel({
             <Button
               type="button"
               variant="outline"
-              disabled={pending}
+              disabled={pending || !bulkAllows("reject")}
               className="border-[var(--line)]"
               onClick={() => run(() => bulkRejectAction(selectedIds))}
             >

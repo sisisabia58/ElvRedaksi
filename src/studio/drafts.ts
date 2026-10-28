@@ -9,7 +9,7 @@ const COVER_PHOTO_DATA_URL =
   /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/;
 const MAX_COVER_PHOTO_BYTES = 2 * 1024 * 1024;
 
-function validateCoverPhotoDataUrl(photoDataUrl: string): string {
+export function validateCoverPhotoDataUrl(photoDataUrl: string): string {
   if (photoDataUrl.trim() !== photoDataUrl || /[\s"']/.test(photoDataUrl)) {
     throw new Error("Format gambar tidak valid");
   }
@@ -134,16 +134,44 @@ function blockIfDirty(textDirty: boolean): void {
   }
 }
 
-async function nextStatusForTextEdit(tx: Sql, row: DraftRow): Promise<DraftStatus> {
-  if (row.status === "scheduled") {
-    assertTransition("human", "scheduled", "needs_review");
-    await cancelUnfinishedPublishJobs(tx, row.id);
-    return "needs_review";
+type LockedDraftRow = {
+  id: string;
+  status: DraftStatus;
+  format: DraftRow["format"];
+  template: DraftRow["template"];
+  slides: Slide[] | string;
+  focal_y: number;
+};
+
+export async function withLockedDraftEdit(
+  tx: Sql,
+  id: string,
+  mode: "human" | "rewrite",
+  write: (locked: LockedDraftRow, nextStatus: DraftStatus) => Promise<{ id: string }[]>,
+): Promise<boolean> {
+  const rows = await tx.rows<LockedDraftRow>(
+    `select id, status, format, template, slides, focal_y from drafts where id = $1 for update`,
+    [id],
+  );
+  const locked = rows[0];
+  if (!locked) {
+    throw new Error("draft tidak ditemukan");
   }
-  if (row.status !== "posting") {
-    await cancelUnfinishedPublishJobs(tx, row.id);
+  let nextStatus: DraftStatus = locked.status;
+  if (locked.status === "scheduled") {
+    if (mode === "human") {
+      assertTransition("human", "scheduled", "needs_review");
+    }
+    nextStatus = "needs_review";
   }
-  return row.status;
+  const updated = await write(locked, nextStatus);
+  if (updated.length === 0) {
+    return false;
+  }
+  if (locked.status !== "posting") {
+    await cancelUnfinishedPublishJobs(tx, id);
+  }
+  return true;
 }
 
 async function failPublishWrite(tx: Sql, id: string): Promise<never> {
@@ -294,46 +322,49 @@ export async function saveDraftText(
 ): Promise<void> {
   requireReviewWrite(role);
   await sql.tx(async (tx) => {
-    const row = await loadDraftRow(tx, id);
-    const existingSlides = parseSlides(row.slides);
-    const existingCover = existingSlides.find((s) => s.role === "cover");
-    const existingPhoto = existingCover
-      ? (existingCover as SlideWithPhoto).photoDataUrl
-      : undefined;
-    const slides = input.slides.map((slide) => {
-      if (slide.role !== "cover") {
-        return slide;
-      }
-      const cover: SlideWithPhoto = { ...slide, kicker: input.kicker };
-      const incoming = (slide as SlideWithPhoto).photoDataUrl;
-      let photo: string | undefined;
-      if (incoming) {
-        photo = validateCoverPhotoDataUrl(incoming);
-      } else if (existingPhoto) {
-        try {
-          photo = validateCoverPhotoDataUrl(existingPhoto);
-        } catch {
-          photo = undefined;
+    await withLockedDraftEdit(tx, id, "human", async (locked, nextStatus) => {
+      const existingSlides = parseSlides(locked.slides);
+      const existingCover = existingSlides.find((s) => s.role === "cover");
+      const existingPhoto = existingCover
+        ? (existingCover as SlideWithPhoto).photoDataUrl
+        : undefined;
+      const slides = input.slides.map((slide) => {
+        if (slide.role !== "cover") {
+          return slide;
         }
-      }
-      if (photo) {
-        cover.photoDataUrl = photo;
-      }
-      return cover;
+        const cover: SlideWithPhoto = { ...slide, kicker: input.kicker };
+        const incoming = (slide as SlideWithPhoto).photoDataUrl;
+        let photo: string | undefined;
+        if (incoming) {
+          photo = validateCoverPhotoDataUrl(incoming);
+        } else if (existingPhoto) {
+          try {
+            photo = validateCoverPhotoDataUrl(existingPhoto);
+          } catch {
+            photo = undefined;
+          }
+        }
+        if (photo) {
+          cover.photoDataUrl = photo;
+        }
+        return cover;
+      });
+      return tx.rows<{ id: string }>(
+        `update drafts set slides = $1::jsonb, caption = $2, hashtags = $3::jsonb, alt_headlines = $4::jsonb,
+         text_dirty = true, status = $5, updated_at = now()
+         where id = $6 and status = $7
+         returning id`,
+        [
+          JSON.stringify(slides),
+          input.caption,
+          JSON.stringify(input.hashtags),
+          JSON.stringify(input.altHeadlines),
+          nextStatus,
+          id,
+          locked.status,
+        ],
+      );
     });
-    const status = await nextStatusForTextEdit(tx, row);
-    await tx.rows(
-      `update drafts set slides = $1::jsonb, caption = $2, hashtags = $3::jsonb, alt_headlines = $4::jsonb,
-       text_dirty = true, status = $5, updated_at = now() where id = $6`,
-      [
-        JSON.stringify(slides),
-        input.caption,
-        JSON.stringify(input.hashtags),
-        JSON.stringify(input.altHeadlines),
-        status,
-        id,
-      ],
-    );
   });
 }
 
@@ -346,16 +377,18 @@ export async function saveCoverPhoto(
   requireReviewWrite(role);
   const safeUrl = validateCoverPhotoDataUrl(photoDataUrl);
   await sql.tx(async (tx) => {
-    const row = await loadDraftRow(tx, id);
-    const slides = parseSlides(row.slides);
-    const updated = slides.map((slide) =>
-      slide.role === "cover" ? ({ ...slide, photoDataUrl: safeUrl } as Slide & { photoDataUrl?: string }) : slide,
-    );
-    const status = await nextStatusForTextEdit(tx, row);
-    await tx.rows(
-      `update drafts set slides = $1::jsonb, text_dirty = true, status = $2, updated_at = now() where id = $3`,
-      [JSON.stringify(updated), status, id],
-    );
+    await withLockedDraftEdit(tx, id, "human", async (locked, nextStatus) => {
+      const slides = parseSlides(locked.slides);
+      const updated = slides.map((slide) =>
+        slide.role === "cover" ? ({ ...slide, photoDataUrl: safeUrl } as Slide & { photoDataUrl?: string }) : slide,
+      );
+      return tx.rows<{ id: string }>(
+        `update drafts set slides = $1::jsonb, text_dirty = true, status = $2, updated_at = now()
+         where id = $3 and status = $4
+         returning id`,
+        [JSON.stringify(updated), nextStatus, id, locked.status],
+      );
+    });
   });
 }
 
@@ -367,15 +400,17 @@ export async function saveFocal(sql: Sql, role: Role, id: string, focalY: number
     return;
   }
   await sql.tx(async (tx) => {
-    const fresh = await loadDraftRow(tx, id);
-    if (Number(fresh.focal_y) === clamped) {
-      return;
-    }
-    const status = await nextStatusForTextEdit(tx, fresh);
-    await tx.rows(
-      `update drafts set focal_y = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
-      [clamped, status, id],
-    );
+    await withLockedDraftEdit(tx, id, "human", async (locked, nextStatus) => {
+      if (Number(locked.focal_y) === clamped) {
+        return [];
+      }
+      return tx.rows<{ id: string }>(
+        `update drafts set focal_y = $1, text_dirty = true, status = $2, updated_at = now()
+         where id = $3 and status = $4
+         returning id`,
+        [clamped, nextStatus, id, locked.status],
+      );
+    });
   });
 }
 
@@ -391,15 +426,17 @@ export async function setFormat(
     return;
   }
   await sql.tx(async (tx) => {
-    const fresh = await loadDraftRow(tx, id);
-    if (fresh.format === format) {
-      return;
-    }
-    const status = await nextStatusForTextEdit(tx, fresh);
-    await tx.rows(
-      `update drafts set format = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
-      [format, status, id],
-    );
+    await withLockedDraftEdit(tx, id, "human", async (locked, nextStatus) => {
+      if (locked.format === format) {
+        return [];
+      }
+      return tx.rows<{ id: string }>(
+        `update drafts set format = $1, text_dirty = true, status = $2, updated_at = now()
+         where id = $3 and status = $4
+         returning id`,
+        [format, nextStatus, id, locked.status],
+      );
+    });
   });
 }
 
@@ -415,15 +452,17 @@ export async function setTemplate(
     return;
   }
   await sql.tx(async (tx) => {
-    const fresh = await loadDraftRow(tx, id);
-    if (fresh.template === template) {
-      return;
-    }
-    const status = await nextStatusForTextEdit(tx, fresh);
-    await tx.rows(
-      `update drafts set template = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
-      [template, status, id],
-    );
+    await withLockedDraftEdit(tx, id, "human", async (locked, nextStatus) => {
+      if (locked.template === template) {
+        return [];
+      }
+      return tx.rows<{ id: string }>(
+        `update drafts set template = $1, text_dirty = true, status = $2, updated_at = now()
+         where id = $3 and status = $4
+         returning id`,
+        [template, nextStatus, id, locked.status],
+      );
+    });
   });
 }
 
