@@ -65,6 +65,7 @@ export type DraftDetail = {
   error: string | null;
   assetIds: string[];
   slideCount: number;
+  updatedAt: Date;
 };
 
 type DraftRow = {
@@ -105,7 +106,7 @@ function coverHeadline(slides: Slide[]): string {
 
 type SlideWithPhoto = Slide & { photoDataUrl?: string };
 
-async function cancelUnfinishedPublishJobs(tx: Sql, draftId: string): Promise<void> {
+export async function cancelUnfinishedPublishJobs(tx: Sql, draftId: string): Promise<void> {
   await tx.rows(
     `delete from jobs
      where name = 'publisher.publish'
@@ -131,6 +132,18 @@ function blockIfDirty(textDirty: boolean): void {
   if (textDirty) {
     throw new Error("Render dulu teks yang baru");
   }
+}
+
+async function nextStatusForTextEdit(tx: Sql, row: DraftRow): Promise<DraftStatus> {
+  if (row.status === "scheduled") {
+    assertTransition("human", "scheduled", "needs_review");
+    await cancelUnfinishedPublishJobs(tx, row.id);
+    return "needs_review";
+  }
+  if (row.status !== "posting") {
+    await cancelUnfinishedPublishJobs(tx, row.id);
+  }
+  return row.status;
 }
 
 async function failPublishWrite(tx: Sql, id: string): Promise<never> {
@@ -215,10 +228,10 @@ export async function countDraftsByStatus(sql: Sql): Promise<Partial<Record<Draf
 }
 
 export async function getDraft(sql: Sql, id: string): Promise<DraftDetail | null> {
-  const rows = await sql.rows<DraftRow>(
+  const rows = await sql.rows<DraftRow & { updated_at: Date }>(
     `select d.id, d.topic_id, d.status, d.format, d.template, d.slides, d.caption, d.hashtags,
             d.alt_headlines, d.focal_y, d.short_code, d.click_count, d.text_dirty, d.manual,
-            d.scheduled_at, d.error, t.score, t.sensitive, s.name as source_name, b.handle
+            d.scheduled_at, d.error, d.updated_at, t.score, t.sensitive, s.name as source_name, b.handle
      from drafts d
      join topics t on t.id = d.topic_id
      join sources s on s.id = t.source_id
@@ -263,6 +276,7 @@ export async function getDraft(sql: Sql, id: string): Promise<DraftDetail | null
     error: row.error,
     assetIds: assetRows.map((a) => a.id),
     slideCount,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -279,44 +293,48 @@ export async function saveDraftText(
   },
 ): Promise<void> {
   requireReviewWrite(role);
-  const row = await loadDraftRow(sql, id);
-  const existingSlides = parseSlides(row.slides);
-  const existingCover = existingSlides.find((s) => s.role === "cover");
-  const existingPhoto = existingCover
-    ? (existingCover as SlideWithPhoto).photoDataUrl
-    : undefined;
-  const slides = input.slides.map((slide) => {
-    if (slide.role !== "cover") {
-      return slide;
-    }
-    const cover: SlideWithPhoto = { ...slide, kicker: input.kicker };
-    const incoming = (slide as SlideWithPhoto).photoDataUrl;
-    let photo: string | undefined;
-    if (incoming) {
-      photo = validateCoverPhotoDataUrl(incoming);
-    } else if (existingPhoto) {
-      try {
-        photo = validateCoverPhotoDataUrl(existingPhoto);
-      } catch {
-        photo = undefined;
+  await sql.tx(async (tx) => {
+    const row = await loadDraftRow(tx, id);
+    const existingSlides = parseSlides(row.slides);
+    const existingCover = existingSlides.find((s) => s.role === "cover");
+    const existingPhoto = existingCover
+      ? (existingCover as SlideWithPhoto).photoDataUrl
+      : undefined;
+    const slides = input.slides.map((slide) => {
+      if (slide.role !== "cover") {
+        return slide;
       }
-    }
-    if (photo) {
-      cover.photoDataUrl = photo;
-    }
-    return cover;
+      const cover: SlideWithPhoto = { ...slide, kicker: input.kicker };
+      const incoming = (slide as SlideWithPhoto).photoDataUrl;
+      let photo: string | undefined;
+      if (incoming) {
+        photo = validateCoverPhotoDataUrl(incoming);
+      } else if (existingPhoto) {
+        try {
+          photo = validateCoverPhotoDataUrl(existingPhoto);
+        } catch {
+          photo = undefined;
+        }
+      }
+      if (photo) {
+        cover.photoDataUrl = photo;
+      }
+      return cover;
+    });
+    const status = await nextStatusForTextEdit(tx, row);
+    await tx.rows(
+      `update drafts set slides = $1::jsonb, caption = $2, hashtags = $3::jsonb, alt_headlines = $4::jsonb,
+       text_dirty = true, status = $5, updated_at = now() where id = $6`,
+      [
+        JSON.stringify(slides),
+        input.caption,
+        JSON.stringify(input.hashtags),
+        JSON.stringify(input.altHeadlines),
+        status,
+        id,
+      ],
+    );
   });
-  await sql.rows(
-    `update drafts set slides = $1::jsonb, caption = $2, hashtags = $3::jsonb, alt_headlines = $4::jsonb,
-     text_dirty = true, updated_at = now() where id = $5`,
-    [
-      JSON.stringify(slides),
-      input.caption,
-      JSON.stringify(input.hashtags),
-      JSON.stringify(input.altHeadlines),
-      id,
-    ],
-  );
 }
 
 export async function saveCoverPhoto(
@@ -326,16 +344,19 @@ export async function saveCoverPhoto(
   photoDataUrl: string,
 ): Promise<void> {
   requireReviewWrite(role);
-  const row = await loadDraftRow(sql, id);
   const safeUrl = validateCoverPhotoDataUrl(photoDataUrl);
-  const slides = parseSlides(row.slides);
-  const updated = slides.map((slide) =>
-    slide.role === "cover" ? ({ ...slide, photoDataUrl: safeUrl } as Slide & { photoDataUrl?: string }) : slide,
-  );
-  await sql.rows(
-    `update drafts set slides = $1::jsonb, text_dirty = true, updated_at = now() where id = $2`,
-    [JSON.stringify(updated), id],
-  );
+  await sql.tx(async (tx) => {
+    const row = await loadDraftRow(tx, id);
+    const slides = parseSlides(row.slides);
+    const updated = slides.map((slide) =>
+      slide.role === "cover" ? ({ ...slide, photoDataUrl: safeUrl } as Slide & { photoDataUrl?: string }) : slide,
+    );
+    const status = await nextStatusForTextEdit(tx, row);
+    await tx.rows(
+      `update drafts set slides = $1::jsonb, text_dirty = true, status = $2, updated_at = now() where id = $3`,
+      [JSON.stringify(updated), status, id],
+    );
+  });
 }
 
 export async function saveFocal(sql: Sql, role: Role, id: string, focalY: number): Promise<void> {
@@ -345,10 +366,17 @@ export async function saveFocal(sql: Sql, role: Role, id: string, focalY: number
   if (Number(row.focal_y) === clamped) {
     return;
   }
-  await sql.rows(`update drafts set focal_y = $1, text_dirty = true, updated_at = now() where id = $2`, [
-    clamped,
-    id,
-  ]);
+  await sql.tx(async (tx) => {
+    const fresh = await loadDraftRow(tx, id);
+    if (Number(fresh.focal_y) === clamped) {
+      return;
+    }
+    const status = await nextStatusForTextEdit(tx, fresh);
+    await tx.rows(
+      `update drafts set focal_y = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
+      [clamped, status, id],
+    );
+  });
 }
 
 export async function setFormat(
@@ -358,11 +386,14 @@ export async function setFormat(
   format: "carousel_full" | "teaser_bio",
 ): Promise<void> {
   requireReviewWrite(role);
-  await loadDraftRow(sql, id);
-  await sql.rows(`update drafts set format = $1, text_dirty = true, updated_at = now() where id = $2`, [
-    format,
-    id,
-  ]);
+  await sql.tx(async (tx) => {
+    const row = await loadDraftRow(tx, id);
+    const status = await nextStatusForTextEdit(tx, row);
+    await tx.rows(
+      `update drafts set format = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
+      [format, status, id],
+    );
+  });
 }
 
 export async function setTemplate(
@@ -372,11 +403,14 @@ export async function setTemplate(
   template: "stabilo" | "foto_penuh" | "serif" | "catatan",
 ): Promise<void> {
   requireReviewWrite(role);
-  await loadDraftRow(sql, id);
-  await sql.rows(`update drafts set template = $1, text_dirty = true, updated_at = now() where id = $2`, [
-    template,
-    id,
-  ]);
+  await sql.tx(async (tx) => {
+    const row = await loadDraftRow(tx, id);
+    const status = await nextStatusForTextEdit(tx, row);
+    await tx.rows(
+      `update drafts set template = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
+      [template, status, id],
+    );
+  });
 }
 
 export async function approveDraftInTx(tx: Sql, role: Role, id: string): Promise<void> {

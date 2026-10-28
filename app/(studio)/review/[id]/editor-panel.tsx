@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import type { Slide } from "@/src/agents/copywriter";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studio/cover-photo";
+import { adoptServerDraft, editorTextFields } from "@/src/studio/editor-sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,6 +48,7 @@ type DraftView = {
   slideCount: number;
   usePublicMedia: boolean;
   assetIds: string[];
+  updatedAt: string;
 };
 
 const TEMPLATES: { value: DraftView["template"]; label: string }[] = [
@@ -103,6 +105,25 @@ export function EditorPanel({
   const [copyLabel, setCopyLabel] = useState("Copy caption + hashtag");
   const [error, setError] = useState<string | null>(null);
   const [blockedPhotoUrl, setBlockedPhotoUrl] = useState<string | null>(null);
+  const [serverBaseline, setServerBaseline] = useState(() => editorTextFields(draft));
+  const [seenUpdatedAt, setSeenUpdatedAt] = useState(draft.updatedAt);
+  if (draft.updatedAt !== seenUpdatedAt) {
+    const next = editorTextFields(draft);
+    const adopted = adoptServerDraft(
+      serverBaseline,
+      { slides, kicker, headline, body, caption, hashtagsText, altHeadlines },
+      next,
+    );
+    setSlides(adopted.slides);
+    setKicker(adopted.kicker);
+    setHeadline(adopted.headline);
+    setBody(adopted.body);
+    setCaption(adopted.caption);
+    setHashtagsText(adopted.hashtagsText);
+    setAltHeadlines(adopted.altHeadlines);
+    setServerBaseline(next);
+    setSeenUpdatedAt(draft.updatedAt);
+  }
 
   const slideTotal = draft.slideCount;
   const clampedIndex = Math.min(slideIndex, Math.max(slideTotal - 1, 0));

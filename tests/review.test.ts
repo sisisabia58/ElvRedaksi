@@ -4,6 +4,7 @@ import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
 import type { Slide } from "../src/agents/copywriter";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "../src/studio/cover-photo";
+import { adoptServerDraft, type EditorTextFields } from "../src/studio/editor-sync";
 import {
   approveDraft,
   bulkApproveDrafts,
@@ -356,5 +357,116 @@ describe("review", () => {
     await expect(approveDraft(sql, "social_media", other)).rejects.toThrow(/Render dulu/);
     await expect(scheduleDraft(sql, "social_media", other, when)).rejects.toThrow(/Render dulu/);
     await expect(postDraftNow(sql, "social_media", other)).rejects.toThrow(/Render dulu/);
+  });
+
+  it("pulls a scheduled draft back to review and cancels its publisher when text is saved", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'scheduled' where id = $1`, [DRAFT_ID]);
+    await enqueue(sql, {
+      name: "publisher.publish",
+      payload: { draftId: DRAFT_ID },
+      runAt: new Date(Date.now() + 3_600_000),
+    });
+    await saveDraftText(sql, "social_media", DRAFT_ID, {
+      slides: [{ role: "cover", kicker: "AI", headline: "Judul baru yang cukup", body: "Isi." }],
+      caption: "Dari Contoh.",
+      hashtags: ["iklan"],
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+      kicker: "AI",
+    });
+    expect(await readDraft(sql, DRAFT_ID)).toMatchObject({
+      status: "needs_review",
+      text_dirty: true,
+    });
+    const jobs = await sql.rows(
+      `select id from jobs
+       where name = 'publisher.publish' and finished_at is null and payload->>'draftId' = $1`,
+      [DRAFT_ID],
+    );
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("does not write when saveFocal repeats the stored focal on a scheduled draft", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'scheduled', focal_y = 40 where id = $1`, [DRAFT_ID]);
+    await enqueue(sql, {
+      name: "publisher.publish",
+      payload: { draftId: DRAFT_ID },
+      runAt: new Date(Date.now() + 3_600_000),
+    });
+    await saveFocal(sql, "social_media", DRAFT_ID, 40);
+    expect(await readDraft(sql, DRAFT_ID)).toMatchObject({
+      status: "scheduled",
+      text_dirty: false,
+      focal_y: 40,
+    });
+    const jobs = await sql.rows(
+      `select id from jobs
+       where name = 'publisher.publish' and finished_at is null and payload->>'draftId' = $1`,
+      [DRAFT_ID],
+    );
+    expect(jobs).toHaveLength(1);
+  });
+
+  it("keeps the in-flight publisher when text is saved during posting", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'posting' where id = $1`, [DRAFT_ID]);
+    await enqueue(sql, {
+      name: "publisher.publish",
+      payload: { draftId: DRAFT_ID },
+      runAt: new Date(),
+      manual: true,
+    });
+    await saveDraftText(sql, "social_media", DRAFT_ID, {
+      slides: [{ role: "cover", kicker: "AI", headline: "Judul baru yang cukup", body: "Isi." }],
+      caption: "Dari Contoh.",
+      hashtags: ["iklan"],
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+      kicker: "AI",
+    });
+    expect(await readDraft(sql, DRAFT_ID)).toMatchObject({
+      status: "posting",
+      text_dirty: true,
+    });
+    const jobs = await sql.rows(
+      `select id from jobs
+       where name = 'publisher.publish' and finished_at is null and payload->>'draftId' = $1`,
+      [DRAFT_ID],
+    );
+    expect(jobs).toHaveLength(1);
+  });
+
+  it("adopts a server rewrite when local fields are unchanged and keeps dirty ones", () => {
+    const previous: EditorTextFields = {
+      slides: [{ role: "cover", kicker: "AI", headline: "Judul lama cukup", body: "Lama." }],
+      kicker: "AI",
+      headline: "Judul lama cukup",
+      body: "Lama.",
+      caption: "Caption lama dari Contoh.",
+      hashtagsText: "iklan, medsos",
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+    };
+    const next: EditorTextFields = {
+      slides: [{ role: "cover", kicker: "Baru", headline: "Judul baru yang cukup", body: "Baru." }],
+      kicker: "Baru",
+      headline: "Judul baru yang cukup",
+      body: "Baru.",
+      caption: "Caption baru dari Contoh.",
+      hashtagsText: "baru, tag, sumber",
+      altHeadlines: ["Alt tiga cukup", "Alt empat cukup"],
+    };
+    expect(adoptServerDraft(previous, previous, next)).toEqual(next);
+    const dirty: EditorTextFields = { ...previous, headline: "Sedang saya ketik" };
+    const adopted = adoptServerDraft(previous, dirty, next);
+    expect(adopted.headline).toBe("Sedang saya ketik");
+    expect(adopted.kicker).toBe(next.kicker);
+    expect(adopted.caption).toBe(next.caption);
+    expect(adopted.hashtagsText).toBe(next.hashtagsText);
+    expect(adopted.body).toBe(next.body);
+    expect(adopted.slides).toEqual(next.slides);
+    expect(adopted.altHeadlines).toEqual(next.altHeadlines);
   });
 });

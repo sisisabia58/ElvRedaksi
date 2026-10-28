@@ -48,6 +48,7 @@ export default async function ReviewEditorPage({ params }: PageParams) {
         slideCount: draft.slideCount,
         usePublicMedia,
         assetIds: draft.assetIds,
+        updatedAt: new Date(draft.updatedAt).toISOString(),
       }}
       canPublish={can(user.role, "publish")}
       canWrite={can(user.role, "review.write")}

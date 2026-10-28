@@ -221,22 +221,48 @@ describe("designer", () => {
 
   it("keeps text_dirty when a newer save lands while the slide is rasterizing", async () => {
     const sql = await seedDesignerDraft("drafted");
-    await runDesigner({
-      sql,
-      payload: { draftId: DRAFT_ID },
-      manual: true,
-      now: new Date(),
-      rasterizer: new RacingRasterizer(async () => {
-        await sql.rows(
-          `update drafts set text_dirty = true, updated_at = updated_at + interval '1 second' where id = $1`,
-          [DRAFT_ID],
-        );
+    await expect(
+      runDesigner({
+        sql,
+        payload: { draftId: DRAFT_ID },
+        manual: true,
+        now: new Date(),
+        rasterizer: new RacingRasterizer(async () => {
+          await sql.rows(
+            `update drafts set text_dirty = true, updated_at = updated_at + interval '1 second' where id = $1`,
+            [DRAFT_ID],
+          );
+        }),
       }),
-    });
+    ).rejects.toThrow(/render pertama/);
     const status = await sql.rows<{ status: string; text_dirty: boolean }>(
       "select status, text_dirty from drafts",
     );
     expect(status[0]).toMatchObject({ status: "drafted", text_dirty: true });
+    const log = await sql.rows("select id from activity where agent = 'designer'");
+    expect(log).toHaveLength(0);
+  });
+
+  it("retries a first render when the draft changes during toPng", async () => {
+    const sql = await seedDesignerDraft("drafted");
+    await expect(
+      runDesigner({
+        sql,
+        payload: { draftId: DRAFT_ID },
+        manual: true,
+        now: new Date(),
+        rasterizer: new RacingRasterizer(async () => {
+          await sql.rows(
+            `update drafts set updated_at = updated_at + interval '1 second' where id = $1`,
+            [DRAFT_ID],
+          );
+        }),
+      }),
+    ).rejects.toThrow(/render pertama/);
+    const status = await sql.rows<{ status: string; text_dirty: boolean; error: string | null }>(
+      "select status, text_dirty, error from drafts",
+    );
+    expect(status[0]).toMatchObject({ status: "drafted", text_dirty: false, error: null });
     const log = await sql.rows("select id from activity where agent = 'designer'");
     expect(log).toHaveLength(0);
   });
