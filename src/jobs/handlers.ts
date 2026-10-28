@@ -3,7 +3,14 @@ import { parseCopy, type Slide } from "../agents/copywriter";
 import { analystSystem, copySystem } from "../agents/prompts";
 import { scoreTopic } from "../agents/analyst";
 import { makeShortCode } from "../domain/code";
-import { PASS_THRESHOLD_DEFAULT, SCOUT_INTERVAL_MS } from "../domain/constants";
+import {
+  GRAPH_BASE,
+  GRAPH_VERSION,
+  INSIGHTS_INTERVAL_MS,
+  PASS_THRESHOLD_DEFAULT,
+  SCOUT_INTERVAL_MS,
+  TIME_ZONE,
+} from "../domain/constants";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
 import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from "../publish/publisher";
@@ -13,6 +20,7 @@ import { createLlm, type LlmProvider } from "../llm/provider";
 import { fetchPublicText } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
+import { normalizeInsights } from "../studio/analytics";
 import { validateCoverPhotoDataUrl, withLockedDraftEdit } from "../studio/drafts";
 import { enqueue, type JobCtx } from "./runner";
 
@@ -871,7 +879,230 @@ async function finishPostingDraft(
   }
 }
 
-export async function runInsights(_ctx: JobCtx): Promise<void> {}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function graphUrl(path: string, accessToken: string, query?: Record<string, string>): string {
+  const url = new URL(`${GRAPH_BASE}/${GRAPH_VERSION}/${path}`);
+  url.searchParams.set("access_token", accessToken);
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, value);
+    }
+  }
+  return url.toString();
+}
+
+async function graphGet(
+  fetchImpl: typeof fetch,
+  path: string,
+  accessToken: string,
+  query?: Record<string, string>,
+): Promise<unknown> {
+  const res = await fetchImpl(graphUrl(path, accessToken, query));
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (!res.ok && !isRecord(body)) {
+    throw new Error(`Instagram API ${res.status}`);
+  }
+  return body;
+}
+
+function readFollowers(body: unknown): number {
+  if (!isRecord(body) || isRecord(body.error)) return 0;
+  return typeof body.followers_count === "number" && Number.isFinite(body.followers_count)
+    ? body.followers_count
+    : 0;
+}
+
+function metricNumber(data: unknown[], name: string): number {
+  for (const item of data) {
+    if (!isRecord(item) || item.name !== name || isRecord(item.error)) continue;
+    if (!Array.isArray(item.values)) return 0;
+    const last = item.values[item.values.length - 1];
+    if (!isRecord(last) || typeof last.value !== "number" || !Number.isFinite(last.value)) return 0;
+    return last.value;
+  }
+  return 0;
+}
+
+function jakartaDate(instant: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(instant);
+}
+
+function readDaily(body: unknown, followers: number): { date: string; views: number; reach: number; followers: number }[] {
+  if (!isRecord(body) || !Array.isArray(body.data)) return [];
+  const byDate = new Map<string, { views: number; reach: number }>();
+  for (const metric of body.data) {
+    if (!isRecord(metric) || isRecord(metric.error)) continue;
+    if (metric.name !== "views" && metric.name !== "reach") continue;
+    if (!Array.isArray(metric.values)) continue;
+    for (const point of metric.values) {
+      if (!isRecord(point) || typeof point.end_time !== "string") continue;
+      if (typeof point.value !== "number" || !Number.isFinite(point.value)) continue;
+      const at = new Date(point.end_time);
+      if (Number.isNaN(at.getTime())) continue;
+      const date = jakartaDate(at);
+      const row = byDate.get(date) ?? { views: 0, reach: 0 };
+      row[metric.name] += point.value;
+      byDate.set(date, row);
+    }
+  }
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, row]) => ({ date, views: row.views, reach: row.reach, followers }));
+}
+
+function readCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readPosts(body: unknown): {
+  igMediaId: string;
+  views: number;
+  reach: number;
+  likes: number;
+  comments: number;
+  saves: number;
+  shares: number;
+}[] {
+  if (!isRecord(body) || !Array.isArray(body.data)) return [];
+  const posts = [];
+  for (const media of body.data) {
+    if (!isRecord(media)) continue;
+    const igMediaId =
+      typeof media.id === "string" ? media.id : typeof media.id === "number" ? String(media.id) : "";
+    if (!igMediaId) continue;
+    const insights = isRecord(media.insights) && !isRecord(media.insights.error) ? media.insights : null;
+    const insightData = insights && Array.isArray(insights.data) ? insights.data : [];
+    posts.push({
+      igMediaId,
+      views: metricNumber(insightData, "views"),
+      reach: metricNumber(insightData, "reach"),
+      saves: metricNumber(insightData, "saved"),
+      shares: metricNumber(insightData, "shares"),
+      likes: readCount(media.like_count),
+      comments: readCount(media.comments_count),
+    });
+  }
+  return posts;
+}
+
+async function enqueueNextInsights(ctx: JobCtx): Promise<void> {
+  // The runner sets finished_at only after this handler returns, so the in-flight
+  // row is still open. Count unlocked rows only; otherwise the next interval is never
+  // scheduled. A second unlocked insights.sync is not enqueued.
+  const pending = await ctx.sql.rows<{ id: string }>(
+    `select id from jobs
+     where name = 'insights.sync' and finished_at is null and locked_at is null
+     limit 1`,
+  );
+  if (pending.length > 0) return;
+  await enqueue(ctx.sql, {
+    name: "insights.sync",
+    payload: {},
+    runAt: new Date(ctx.now.getTime() + INSIGHTS_INTERVAL_MS),
+    manual: false,
+  });
+}
+
+export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): Promise<void> {
+  const fetchImpl = ctx.fetchImpl ?? fetch;
+  const rows = await ctx.sql.rows<{ ig_user_id: string | null; access_token: string | null }>(
+    `select ig_user_id, access_token from ig_connection where id = 1`,
+  );
+  const connection = rows[0];
+  const token = connection?.access_token?.trim() ?? "";
+  const igUserId = connection?.ig_user_id?.trim() ?? "";
+  if (!token || !igUserId) {
+    await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+      randomUUID(),
+      "analitik",
+      "Analitik dilewati: Instagram belum terhubung",
+    ]);
+    await enqueueNextInsights(ctx);
+    return;
+  }
+
+  const since = Math.floor((ctx.now.getTime() - 90 * 24 * 60 * 60 * 1000) / 1000);
+  const until = Math.floor(ctx.now.getTime() / 1000);
+  const [followersBody, insightsBody, mediaBody] = await Promise.all([
+    graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }),
+    graphGet(fetchImpl, `${igUserId}/insights`, token, {
+      metric: "views,reach",
+      period: "day",
+      since: String(since),
+      until: String(until),
+    }),
+    graphGet(fetchImpl, `${igUserId}/media`, token, {
+      fields: "id,timestamp,like_count,comments_count,media_type,insights.metric(views,reach,saved,shares)",
+      limit: "50",
+    }),
+  ]);
+
+  const followers = readFollowers(followersBody);
+  const normalized = normalizeInsights({
+    followers,
+    daily: readDaily(insightsBody, followers),
+    accountsEngaged: null,
+    posts: readPosts(mediaBody),
+  });
+
+  await ctx.sql.tx(async (tx) => {
+    await tx.rows(
+      `insert into insight_snapshots (id, taken_at, followers, views, reach, interactions, accounts_engaged, daily)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+      [
+        randomUUID(),
+        ctx.now,
+        normalized.snapshot.followers,
+        normalized.snapshot.views,
+        normalized.snapshot.reach,
+        normalized.snapshot.interactions,
+        normalized.snapshot.accountsEngaged,
+        JSON.stringify(normalized.snapshot.daily),
+      ],
+    );
+    for (const post of normalized.posts) {
+      await tx.rows(
+        `insert into post_insights (draft_id, views, reach, likes, comments, saves, shares, synced_at)
+         select d.id, $2, $3, $4, $5, $6, $7, $8
+         from drafts d
+         where d.ig_media_id = $1
+         on conflict (draft_id) do update set
+           views = excluded.views,
+           reach = excluded.reach,
+           likes = excluded.likes,
+           comments = excluded.comments,
+           saves = excluded.saves,
+           shares = excluded.shares,
+           synced_at = excluded.synced_at`,
+        [
+          post.igMediaId,
+          post.views,
+          post.reach,
+          post.likes,
+          post.comments,
+          post.saves,
+          post.shares,
+          ctx.now,
+        ],
+      );
+    }
+  });
+
+  await enqueueNextInsights(ctx);
+}
 
 export const jobHandlers = {
   "scout.scan": runScoutCron,
