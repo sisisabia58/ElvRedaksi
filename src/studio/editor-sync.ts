@@ -32,6 +32,27 @@ function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+export function clampedFocal(value: number): number {
+  return Math.min(100, Math.max(0, Math.round(Number(value))));
+}
+
+export function focalSliderIsUnsaved(savedFocal: number, sliderValue: number): boolean {
+  return clampedFocal(sliderValue) !== clampedFocal(savedFocal);
+}
+
+export function editorPublishBlocked(input: {
+  textDirty: boolean;
+  hasUnsavedTextEdits: boolean;
+  savedFocal: number;
+  sliderFocal: number;
+}): boolean {
+  return (
+    input.textDirty ||
+    input.hasUnsavedTextEdits ||
+    focalSliderIsUnsaved(input.savedFocal, input.sliderFocal)
+  );
+}
+
 export function adoptServerDraft(
   previous: EditorTextFields,
   local: EditorTextFields,

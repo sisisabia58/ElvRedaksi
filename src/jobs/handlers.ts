@@ -535,6 +535,13 @@ function photoInputForSlide(
   return { photoDataUrl, focalY: draftFocalY };
 }
 
+class SupersededRenderError extends Error {
+  constructor() {
+    super("superseded render");
+    this.name = "SupersededRenderError";
+  }
+}
+
 export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const ownedRasterizer = ctx.rasterizer === undefined;
   const rasterizer = ctx.rasterizer ?? new PlaywrightRasterizer();
@@ -576,8 +583,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const current = draft.status as DraftStatus;
   const startedAt = draft.updated_at;
 
-  await ctx.sql.rows(`delete from assets where draft_id = $1`, [draftId]);
-
+  const rendered: Uint8Array[] = [];
   try {
     try {
       for (let index = 0; index < selected.length; index++) {
@@ -594,11 +600,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
           focalY,
           photoDataUrl,
         });
-        const bytes = await rasterizer.toPng(html);
-        await ctx.sql.rows(
-          `insert into assets (id, draft_id, slide_index, bytes) values ($1, $2, $3, $4)`,
-          [randomUUID(), draftId, index, bytes],
-        );
+        rendered.push(await rasterizer.toPng(html));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -611,31 +613,46 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
     }
   }
 
-  let updated: { id: string }[];
-  if (current === "drafted") {
-    assertTransition("worker", "drafted", "needs_review");
-    updated = await ctx.sql.rows<{ id: string }>(
-      `update drafts
-       set status = 'needs_review', text_dirty = false, error = null, updated_at = $1
-       where id = $2 and status = 'drafted' and updated_at = $3
-       returning id`,
-      [ctx.now, draftId, startedAt],
-    );
-  } else {
-    updated = await ctx.sql.rows<{ id: string }>(
-      `update drafts
-       set text_dirty = false, error = null, updated_at = $1
-       where id = $2 and status = $3 and updated_at = $4
-       returning id`,
-      [ctx.now, draftId, current, startedAt],
-    );
-  }
-
-  if (updated.length === 0) {
-    if (current === "drafted") {
-      throw new Error("render pertama belum masuk antrian review");
+  try {
+    await ctx.sql.tx(async (tx) => {
+      await tx.rows(`delete from assets where draft_id = $1`, [draftId]);
+      for (let index = 0; index < rendered.length; index++) {
+        await tx.rows(
+          `insert into assets (id, draft_id, slide_index, bytes) values ($1, $2, $3, $4)`,
+          [randomUUID(), draftId, index, rendered[index]],
+        );
+      }
+      let updated: { id: string }[];
+      if (current === "drafted") {
+        assertTransition("worker", "drafted", "needs_review");
+        updated = await tx.rows<{ id: string }>(
+          `update drafts
+           set status = 'needs_review', text_dirty = false, error = null, updated_at = $1
+           where id = $2 and status = 'drafted' and updated_at = $3
+           returning id`,
+          [ctx.now, draftId, startedAt],
+        );
+      } else {
+        updated = await tx.rows<{ id: string }>(
+          `update drafts
+           set text_dirty = false, error = null, updated_at = $1
+           where id = $2 and status = $3 and updated_at = $4
+           returning id`,
+          [ctx.now, draftId, current, startedAt],
+        );
+      }
+      if (updated.length === 0) {
+        throw new SupersededRenderError();
+      }
+    });
+  } catch (error) {
+    if (error instanceof SupersededRenderError) {
+      if (current === "drafted") {
+        throw new Error("first render did not enter the review queue");
+      }
+      return;
     }
-    return;
+    throw error;
   }
 
   const coverHeadline = selected[0]?.headline ?? "draft";

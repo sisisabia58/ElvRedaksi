@@ -386,9 +386,16 @@ export async function setFormat(
   format: "carousel_full" | "teaser_bio",
 ): Promise<void> {
   requireReviewWrite(role);
+  const row = await loadDraftRow(sql, id);
+  if (row.format === format) {
+    return;
+  }
   await sql.tx(async (tx) => {
-    const row = await loadDraftRow(tx, id);
-    const status = await nextStatusForTextEdit(tx, row);
+    const fresh = await loadDraftRow(tx, id);
+    if (fresh.format === format) {
+      return;
+    }
+    const status = await nextStatusForTextEdit(tx, fresh);
     await tx.rows(
       `update drafts set format = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
       [format, status, id],
@@ -403,9 +410,16 @@ export async function setTemplate(
   template: "stabilo" | "foto_penuh" | "serif" | "catatan",
 ): Promise<void> {
   requireReviewWrite(role);
+  const row = await loadDraftRow(sql, id);
+  if (row.template === template) {
+    return;
+  }
   await sql.tx(async (tx) => {
-    const row = await loadDraftRow(tx, id);
-    const status = await nextStatusForTextEdit(tx, row);
+    const fresh = await loadDraftRow(tx, id);
+    if (fresh.template === template) {
+      return;
+    }
+    const status = await nextStatusForTextEdit(tx, fresh);
     await tx.rows(
       `update drafts set template = $1, text_dirty = true, status = $2, updated_at = now() where id = $3`,
       [template, status, id],

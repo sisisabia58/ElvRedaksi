@@ -4,7 +4,12 @@ import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
 import type { Slide } from "../src/agents/copywriter";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "../src/studio/cover-photo";
-import { adoptServerDraft, type EditorTextFields } from "../src/studio/editor-sync";
+import {
+  adoptServerDraft,
+  editorPublishBlocked,
+  focalSliderIsUnsaved,
+  type EditorTextFields,
+} from "../src/studio/editor-sync";
 import {
   approveDraft,
   bulkApproveDrafts,
@@ -20,6 +25,7 @@ import {
   saveDraftText,
   saveFocal,
   scheduleDraft,
+  setTemplate,
 } from "../src/studio/drafts";
 import { enqueue } from "../src/jobs/runner";
 
@@ -410,6 +416,28 @@ describe("review", () => {
     expect(jobs).toHaveLength(1);
   });
 
+  it("does not write when setTemplate repeats the stored template on a scheduled draft", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'scheduled' where id = $1`, [DRAFT_ID]);
+    await enqueue(sql, {
+      name: "publisher.publish",
+      payload: { draftId: DRAFT_ID },
+      runAt: new Date(Date.now() + 3_600_000),
+    });
+    await setTemplate(sql, "social_media", DRAFT_ID, "serif");
+    expect(await readDraft(sql, DRAFT_ID)).toMatchObject({
+      status: "scheduled",
+      text_dirty: false,
+    });
+    const jobs = await sql.rows(
+      `select id from jobs
+       where name = 'publisher.publish' and finished_at is null and payload->>'draftId' = $1`,
+      [DRAFT_ID],
+    );
+    expect(jobs).toHaveLength(1);
+  });
+
   it("keeps the in-flight publisher when text is saved during posting", async () => {
     const sql = await createTestSql();
     await seedDraft(sql, false);
@@ -468,5 +496,45 @@ describe("review", () => {
     expect(adopted.body).toBe(next.body);
     expect(adopted.slides).toEqual(next.slides);
     expect(adopted.altHeadlines).toEqual(next.altHeadlines);
+  });
+
+  it("treats a focal slider that differs from the saved value as unsaved", () => {
+    expect(focalSliderIsUnsaved(50, 50)).toBe(false);
+    expect(focalSliderIsUnsaved(50, 50.4)).toBe(false);
+    expect(focalSliderIsUnsaved(50, 62)).toBe(true);
+    expect(focalSliderIsUnsaved(0, -3)).toBe(false);
+    expect(focalSliderIsUnsaved(100, 140)).toBe(false);
+    expect(
+      editorPublishBlocked({
+        textDirty: false,
+        hasUnsavedTextEdits: false,
+        savedFocal: 50,
+        sliderFocal: 62,
+      }),
+    ).toBe(true);
+    expect(
+      editorPublishBlocked({
+        textDirty: false,
+        hasUnsavedTextEdits: false,
+        savedFocal: 50,
+        sliderFocal: 50,
+      }),
+    ).toBe(false);
+    expect(
+      editorPublishBlocked({
+        textDirty: true,
+        hasUnsavedTextEdits: false,
+        savedFocal: 50,
+        sliderFocal: 50,
+      }),
+    ).toBe(true);
+    expect(
+      editorPublishBlocked({
+        textDirty: false,
+        hasUnsavedTextEdits: true,
+        savedFocal: 50,
+        sliderFocal: 50,
+      }),
+    ).toBe(true);
   });
 });

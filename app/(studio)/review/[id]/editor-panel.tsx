@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import type { Slide } from "@/src/agents/copywriter";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studio/cover-photo";
-import { adoptServerDraft, editorTextFields } from "@/src/studio/editor-sync";
+import {
+  adoptServerDraft,
+  clampedFocal,
+  editorPublishBlocked,
+  editorTextFields,
+  focalSliderIsUnsaved,
+} from "@/src/studio/editor-sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -251,15 +257,20 @@ export function EditorPanel({
   ]);
 
   function commitFocalFromInput(input: HTMLInputElement) {
-    const value = Math.min(100, Math.max(0, Math.round(Number(input.value))));
+    const value = clampedFocal(Number(input.value));
     setFocalY(value);
-    if (value === Math.round(Number(draft.focalY))) {
+    if (!focalSliderIsUnsaved(draft.focalY, value)) {
       return;
     }
     run(() => saveFocalAction(draft.id, value));
   }
 
-  const publishBlocked = draft.textDirty || hasUnsavedTextEdits;
+  const publishBlocked = editorPublishBlocked({
+    textDirty: draft.textDirty,
+    hasUnsavedTextEdits,
+    savedFocal: draft.focalY,
+    sliderFocal: focalY,
+  });
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -335,9 +346,12 @@ export function EditorPanel({
                   disabled={!canWrite || pending}
                   className="mt-2 w-full"
                   onChange={(e) => setFocalY(Number(e.target.value))}
-                  onMouseUp={(e) => commitFocalFromInput(e.currentTarget)}
-                  onTouchEnd={(e) => commitFocalFromInput(e.currentTarget)}
-                  onKeyUp={(e) => commitFocalFromInput(e.currentTarget)}
+                  onPointerDown={(e) => {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerUp={(e) => commitFocalFromInput(e.currentTarget)}
+                  onLostPointerCapture={(e) => commitFocalFromInput(e.currentTarget)}
+                  onBlur={(e) => commitFocalFromInput(e.currentTarget)}
                 />
               </label>
               {canWrite ? (

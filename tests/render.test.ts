@@ -25,6 +25,43 @@ class RacingRasterizer extends FakeRasterizer {
   }
 }
 
+const PRIOR_ASSETS = ["prior-slide-0", "prior-slide-1"];
+
+async function insertPriorAssets(sql: Awaited<ReturnType<typeof createTestSql>>) {
+  await sql.rows(
+    `insert into assets (id, draft_id, slide_index, bytes) values
+      ($1, $2, 0, $3),
+      ($4, $2, 1, $5)`,
+    [
+      "cccccccc-cccc-cccc-cccc-ccccccccccc1",
+      DRAFT_ID,
+      Buffer.from(PRIOR_ASSETS[0]),
+      "cccccccc-cccc-cccc-cccc-ccccccccccc2",
+      Buffer.from(PRIOR_ASSETS[1]),
+    ],
+  );
+}
+
+function assetText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.startsWith("\\x") ? Buffer.from(value.slice(2), "hex").toString("utf8") : value;
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString("utf8");
+  }
+  throw new Error(`unexpected asset bytes: ${Object.prototype.toString.call(value)}`);
+}
+
+async function expectPriorAssets(sql: Awaited<ReturnType<typeof createTestSql>>) {
+  const rows = await sql.rows<{ slide_index: number; bytes: unknown }>(
+    "select slide_index, bytes from assets order by slide_index",
+  );
+  expect(rows.map((row) => ({ slide_index: row.slide_index, bytes: assetText(row.bytes) }))).toEqual([
+    { slide_index: 0, bytes: PRIOR_ASSETS[0] },
+    { slide_index: 1, bytes: PRIOR_ASSETS[1] },
+  ]);
+}
+
 async function seedDesignerDraft(status: "drafted" | "needs_review") {
   const sql = await createTestSql();
   await seedDefaults(sql);
@@ -199,6 +236,7 @@ describe("designer", () => {
 
   it("keeps an approval that lands while the slide is rasterizing", async () => {
     const sql = await seedDesignerDraft("needs_review");
+    await insertPriorAssets(sql);
     await runDesigner({
       sql,
       payload: { draftId: DRAFT_ID },
@@ -217,10 +255,12 @@ describe("designer", () => {
     expect(status[0]).toMatchObject({ status: "approved", text_dirty: false });
     const log = await sql.rows("select id from activity where agent = 'designer'");
     expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
   });
 
   it("keeps text_dirty when a newer save lands while the slide is rasterizing", async () => {
     const sql = await seedDesignerDraft("drafted");
+    await insertPriorAssets(sql);
     await expect(
       runDesigner({
         sql,
@@ -234,17 +274,19 @@ describe("designer", () => {
           );
         }),
       }),
-    ).rejects.toThrow(/render pertama/);
+    ).rejects.toThrow(/did not enter the review queue/);
     const status = await sql.rows<{ status: string; text_dirty: boolean }>(
       "select status, text_dirty from drafts",
     );
     expect(status[0]).toMatchObject({ status: "drafted", text_dirty: true });
     const log = await sql.rows("select id from activity where agent = 'designer'");
     expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
   });
 
   it("retries a first render when the draft changes during toPng", async () => {
     const sql = await seedDesignerDraft("drafted");
+    await insertPriorAssets(sql);
     await expect(
       runDesigner({
         sql,
@@ -258,17 +300,49 @@ describe("designer", () => {
           );
         }),
       }),
-    ).rejects.toThrow(/render pertama/);
+    ).rejects.toThrow(/did not enter the review queue/);
     const status = await sql.rows<{ status: string; text_dirty: boolean; error: string | null }>(
       "select status, text_dirty, error from drafts",
     );
     expect(status[0]).toMatchObject({ status: "drafted", text_dirty: false, error: null });
     const log = await sql.rows("select id from activity where agent = 'designer'");
     expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
+  });
+
+  it("keeps previous assets when the rasterizer throws", async () => {
+    const sql = await seedDesignerDraft("drafted");
+    await insertPriorAssets(sql);
+    let calls = 0;
+    await expect(
+      runDesigner({
+        sql,
+        payload: { draftId: DRAFT_ID },
+        manual: true,
+        now: new Date(),
+        rasterizer: {
+          async toPng() {
+            calls += 1;
+            if (calls > 1) {
+              throw new Error("raster failed");
+            }
+            return Buffer.from("new-png");
+          },
+        },
+      }),
+    ).rejects.toThrow(/raster failed/);
+    const status = await sql.rows<{ status: string; text_dirty: boolean; error: string | null }>(
+      "select status, text_dirty, error from drafts",
+    );
+    expect(status[0]).toMatchObject({ status: "drafted", text_dirty: false, error: "raster failed" });
+    const log = await sql.rows("select id from activity where agent = 'designer'");
+    expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
   });
 
   it("keeps text_dirty when a newer save lands during a re-render", async () => {
     const sql = await seedDesignerDraft("needs_review");
+    await insertPriorAssets(sql);
     await runDesigner({
       sql,
       payload: { draftId: DRAFT_ID },
@@ -285,5 +359,6 @@ describe("designer", () => {
       "select status, text_dirty from drafts",
     );
     expect(status[0]).toMatchObject({ status: "needs_review", text_dirty: true });
+    await expectPriorAssets(sql);
   });
 });
