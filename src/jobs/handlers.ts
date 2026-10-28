@@ -6,6 +6,7 @@ import { makeShortCode } from "../domain/code";
 import { PASS_THRESHOLD_DEFAULT, SCOUT_INTERVAL_MS } from "../domain/constants";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
+import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from "../publish/publisher";
 import { renderSlideHtml, safePhotoDataUrl, slidesForFormat, type SlideTemplate } from "../render/html";
 import { PlaywrightRasterizer, type Rasterizer } from "../render/raster";
 import { createLlm, type LlmProvider } from "../llm/provider";
@@ -692,7 +693,148 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
 }
 
 
-export async function runPublisher(_ctx: JobCtx): Promise<void> {}
+const PUBLIC_BASE_FALLBACK = "http://127.0.0.1:43123";
+
+function asStringArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function asSlides(raw: unknown): Slide[] {
+  if (Array.isArray(raw)) {
+    return raw as Slide[];
+  }
+  if (typeof raw === "string") {
+    return JSON.parse(raw) as Slide[];
+  }
+  return [];
+}
+
+export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Promise<void> {
+  const draftId = ctx.payload.draftId;
+  if (typeof draftId !== "string" || !draftId) {
+    throw new Error("draft tidak ditemukan");
+  }
+
+  const rows = await ctx.sql.rows<{
+    status: DraftStatus;
+    caption: string;
+    hashtags: unknown;
+    slides: unknown;
+    format: "carousel_full" | "teaser_bio";
+    share_to_story: boolean;
+    topic_url: string;
+    source_name: string;
+    public_base_url: string | null;
+    ig_user_id: string | null;
+    access_token: string | null;
+  }>(
+    `select d.status, d.caption, d.hashtags, d.slides, d.format, d.share_to_story,
+            t.url as topic_url, s.name as source_name,
+            b.public_base_url,
+            i.ig_user_id, i.access_token
+     from drafts d
+     join topics t on t.id = d.topic_id
+     join sources s on s.id = t.source_id
+     left join brand b on b.id = 1
+     left join ig_connection i on i.id = 1
+     where d.id = $1`,
+    [draftId],
+  );
+  const draft = rows[0];
+  if (!draft) {
+    throw new Error("draft tidak ditemukan");
+  }
+
+  if (draft.status === "posted" || draft.status === "failed") {
+    return;
+  }
+  if (draft.status === "scheduled") {
+    assertTransition("worker", "scheduled", "posting");
+    const updated = await ctx.sql.rows<{ id: string }>(
+      `update drafts set status = 'posting', updated_at = $2
+       where id = $1 and status = 'scheduled'
+       returning id`,
+      [draftId, ctx.now],
+    );
+    if (updated.length === 0) {
+      throw new Error("publish requires human approval");
+    }
+  } else if (draft.status !== "posting") {
+    throw new Error("publish requires human approval");
+  }
+
+  if (process.env.META_PROVIDER === "meta" && draft.access_token == null) {
+    assertTransition("worker", "posting", "failed");
+    await ctx.sql.rows(
+      `update drafts set status = 'failed', error = $1, updated_at = $2
+       where id = $3 and status = 'posting'`,
+      ["Instagram belum terhubung", ctx.now, draftId],
+    );
+    return;
+  }
+
+  const publisher =
+    ctx.publisher ??
+    (process.env.META_PROVIDER === "meta" ? new MetaPublisher(fetch) : new FakePublisher());
+
+  let result: PublishResult;
+  try {
+    if (!draft.topic_url || !draft.source_name) {
+      throw new Error("draft tidak ditemukan");
+    }
+    const assets = await ctx.sql.rows<{ id: string; slide_index: number }>(
+      `select id, slide_index from assets where draft_id = $1 order by slide_index`,
+      [draftId],
+    );
+    const publicBaseUrl = (draft.public_base_url || PUBLIC_BASE_FALLBACK).replace(/\/$/, "");
+    const imageUrls = assets.map((asset) => `${publicBaseUrl}/media/${asset.id}`);
+    const selected = slidesForFormat(draft.format, asSlides(draft.slides));
+    const altTexts = assets.map((asset) => selected[asset.slide_index]?.headline ?? "");
+    const hashtags = asStringArray(draft.hashtags);
+    const caption = `${draft.caption}\n\n${hashtags.map((tag) => `#${tag}`).join(" ")}`;
+    result = await publisher.publish({
+      igUserId: draft.ig_user_id ?? "",
+      accessToken: draft.access_token ?? "",
+      imageUrls,
+      caption,
+      altTexts,
+      shareToStory: draft.share_to_story,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assertTransition("worker", "posting", "failed");
+    await ctx.sql.rows(
+      `update drafts set status = 'failed', error = $1, updated_at = $2
+       where id = $3 and status = 'posting'`,
+      [message, ctx.now, draftId],
+    );
+    return;
+  }
+
+  assertTransition("worker", "posting", "posted");
+  const posted = await ctx.sql.rows<{ id: string }>(
+    `update drafts
+     set status = 'posted', ig_media_id = $1, story_media_id = $2, story_error = $3,
+         posted_at = $4, updated_at = $4, error = null
+     where id = $5 and status = 'posting'
+     returning id`,
+    [result.mediaId, result.storyMediaId, result.storyError, ctx.now, draftId],
+  );
+  if (posted.length === 0) {
+    throw new Error("Status draf sudah berubah");
+  }
+}
 
 export async function runInsights(_ctx: JobCtx): Promise<void> {}
 
