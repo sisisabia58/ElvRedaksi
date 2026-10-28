@@ -5,7 +5,10 @@ import { jobHandlers } from "@/src/jobs/handlers";
 import { runDueJobs } from "@/src/jobs/runner";
 
 function authorized(request: Request): boolean {
-  const secret = process.env.CRON_SECRET ?? "";
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return false;
+  }
   const expected = Buffer.from(`Bearer ${secret}`);
   const provided = Buffer.from(request.headers.get("Authorization") ?? "");
   if (expected.length !== provided.length) {

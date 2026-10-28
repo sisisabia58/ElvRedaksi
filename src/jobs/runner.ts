@@ -143,33 +143,43 @@ async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
   });
 }
 
-export async function runDueJobs(sql: Sql, now: Date, deps: JobDeps): Promise<number> {
-  const claimed = await claimDueJobs(sql, now);
-  let ran = 0;
+async function releaseJobLock(sql: Sql, jobId: string): Promise<void> {
+  try {
+    await sql.rows(`update jobs set locked_at = null where id = $1 and locked_at is not null`, [jobId]);
+  } catch {
+    // A bookkeeping failure on one job must not abort the rest of the batch.
+  }
+}
 
-  for (const job of claimed) {
-    let lockCleared = false;
-    try {
-      if (
-        WORK_HOUR_GATED.has(job.name) &&
-        !job.manual &&
-        !isWithinWorkHours(now, deps.workStart, deps.workEnd)
-      ) {
+async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps): Promise<boolean> {
+  try {
+    if (
+      WORK_HOUR_GATED.has(job.name) &&
+      !job.manual &&
+      !isWithinWorkHours(now, deps.workStart, deps.workEnd)
+    ) {
+      try {
         const runAt = nextWorkStart(now, deps.workStart);
         await sql.rows(`update jobs set locked_at = null, run_at = $1 where id = $2`, [runAt, job.id]);
-        lockCleared = true;
-        continue;
+      } catch {
+        // defer bookkeeping failure; lock cleared in finally
       }
+      return false;
+    }
 
-      const ctx: JobCtx = { sql, payload: job.payload, manual: job.manual, now };
+    const ctx: JobCtx = { sql, payload: job.payload, manual: job.manual, now };
+    try {
+      await deps.handlers[job.name](ctx);
       try {
-        await deps.handlers[job.name](ctx);
         await sql.rows(`update jobs set finished_at = $1, locked_at = null where id = $2`, [now, job.id]);
-        lockCleared = true;
-        ran += 1;
-      } catch (error) {
-        const attempts = job.attempts + 1;
-        const message = error instanceof Error ? error.message : String(error);
+        return true;
+      } catch {
+        return false;
+      }
+    } catch (error) {
+      const attempts = job.attempts + 1;
+      const message = error instanceof Error ? error.message : String(error);
+      try {
         if (attempts < 3) {
           const retryAt = new Date(now.getTime() + 5 * 60_000);
           await sql.rows(
@@ -182,12 +192,29 @@ export async function runDueJobs(sql: Sql, now: Date, deps: JobDeps): Promise<nu
             [attempts, message, now, job.id],
           );
         }
-        lockCleared = true;
+      } catch {
+        // retry bookkeeping failure; lock cleared in finally
       }
-    } finally {
-      if (!lockCleared) {
-        await sql.rows(`update jobs set locked_at = null where id = $1 and locked_at is not null`, [job.id]);
+      return false;
+    }
+  } finally {
+    await releaseJobLock(sql, job.id);
+  }
+}
+
+export async function runDueJobs(sql: Sql, now: Date, deps: JobDeps): Promise<number> {
+  const claimed = await claimDueJobs(sql, now);
+  let ran = 0;
+
+  try {
+    for (const job of claimed) {
+      if (await runClaimedJob(sql, job, now, deps)) {
+        ran += 1;
       }
+    }
+  } finally {
+    for (const job of claimed) {
+      await releaseJobLock(sql, job.id);
     }
   }
 
