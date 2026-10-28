@@ -31,7 +31,7 @@ const settingsSchema = z.object({
   workEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Jam harus HH:MM."),
   passThreshold: z
     .number()
-    .int()
+    .int("Ambang skor 0 sampai 100.")
     .min(0, "Ambang skor 0 sampai 100.")
     .max(100, "Ambang skor 0 sampai 100."),
   defaultFormat: z.enum(["carousel_full", "teaser_bio"]),
@@ -123,10 +123,14 @@ export async function saveInstagramToken(
     );
     return;
   }
+  const username = input.username.trim();
+  if (!username) {
+    throw new Error("Nama pengguna Instagram wajib diisi.");
+  }
   await sql.rows(
     `update ig_connection
      set ig_user_id = $1, access_token = $2, username = $3, connected_at = now()
      where id = 1`,
-    [igUserId, accessToken, input.username.trim()],
+    [igUserId, accessToken, username],
   );
 }

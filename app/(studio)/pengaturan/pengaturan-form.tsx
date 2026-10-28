@@ -45,7 +45,7 @@ export function PengaturanForm({
       ) : null}
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Brand</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Merek</h2>
         <form
           className="space-y-3"
           action={(formData) => {
@@ -73,10 +73,10 @@ export function PengaturanForm({
           }}
         >
           <Field label="Nama" name="name" defaultValue={settings.name} />
-          <Field label="Handle" name="handle" defaultValue={settings.handle} />
+          <Field label="Nama akun" name="handle" defaultValue={settings.handle} />
           <Field label="Inisial" name="initial" defaultValue={settings.initial} maxLength={1} />
           <Field label="Aksen" name="accent" defaultValue={settings.accent} />
-          <Field label="Kicker" name="kicker" defaultValue={settings.kicker} />
+          <Field label="Teks pembuka" name="kicker" defaultValue={settings.kicker} />
           <div className="grid grid-cols-2 gap-3">
             <Field label="Jam mulai" name="workStart" defaultValue={settings.workStart} />
             <Field label="Jam selesai" name="workEnd" defaultValue={settings.workEnd} />
@@ -95,8 +95,8 @@ export function PengaturanForm({
               defaultValue={settings.defaultFormat}
               className={fieldClass}
             >
-              <option value="carousel_full">carousel_full</option>
-              <option value="teaser_bio">teaser_bio</option>
+              <option value="carousel_full">Carousel penuh</option>
+              <option value="teaser_bio">Teaser + link bio</option>
             </select>
           </div>
           <div className="space-y-1">
@@ -107,10 +107,10 @@ export function PengaturanForm({
               defaultValue={settings.defaultTemplate}
               className={fieldClass}
             >
-              <option value="stabilo">stabilo</option>
-              <option value="foto_penuh">foto_penuh</option>
-              <option value="serif">serif</option>
-              <option value="catatan">catatan</option>
+              <option value="stabilo">Stabilo</option>
+              <option value="foto_penuh">Foto penuh</option>
+              <option value="serif">Serif</option>
+              <option value="catatan">Catatan</option>
             </select>
           </div>
           <Field label="URL publik" name="publicBaseUrl" defaultValue={settings.publicBaseUrl} />
@@ -168,9 +168,9 @@ export function PengaturanForm({
               });
             }}
           >
-            <Field label="ID pengguna Instagram" name="igUserId" autoComplete="off" />
-            <Field label="Nama pengguna Instagram" name="igUsername" autoComplete="off" />
-            <Field label="Token akses" name="accessToken" type="password" autoComplete="new-password" />
+            <Field label="ID pengguna Instagram" name="igUserId" autoComplete="off" required />
+            <Field label="Nama pengguna Instagram" name="igUsername" autoComplete="off" required />
+            <Field label="Token akses" name="accessToken" type="password" autoComplete="new-password" required />
             {igError ? (
               <p className="text-sm text-destructive" role="alert">
                 {igError}
@@ -196,6 +196,7 @@ function Field({
   type = "text",
   maxLength,
   autoComplete,
+  required,
 }: {
   label: string;
   name: string;
@@ -203,6 +204,7 @@ function Field({
   type?: string;
   maxLength?: number;
   autoComplete?: string;
+  required?: boolean;
 }) {
   return (
     <div className="space-y-1">
@@ -214,6 +216,7 @@ function Field({
         defaultValue={defaultValue}
         maxLength={maxLength}
         autoComplete={autoComplete}
+        required={required}
         className="border-[var(--line)] bg-[var(--panel)]"
       />
     </div>

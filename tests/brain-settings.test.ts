@@ -44,6 +44,13 @@ describe("brain and settings", () => {
     expect(settings.handle).toBe("redaksi_meja");
     expect(settings.igUsername).toBe("meja");
     expect(JSON.stringify(settings)).not.toContain("super-secret");
+    await expect(
+      saveInstagramToken(sql, "admin", {
+        igUserId: "1789",
+        accessToken: "token",
+        username: "   ",
+      }),
+    ).rejects.toThrow(/Nama pengguna Instagram wajib diisi/);
     await expect(saveSettings(sql, "social_media", settings)).rejects.toThrow(/forbidden/);
   });
 });
