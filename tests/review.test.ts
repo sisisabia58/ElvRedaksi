@@ -10,6 +10,7 @@ import {
   editorTextFields,
   focalSliderIsUnsaved,
   readPreviewFields,
+  switchPreviewFormat,
   writePreviewFields,
   type EditorTextFields,
 } from "../src/studio/editor-sync";
@@ -575,8 +576,16 @@ describe("review", () => {
     const dirty = { ...previous, headline: "Sedang saya ketik poin" };
     const adopted = adoptServerDraft(previous, dirty, next, { format: "carousel_full", index: 1 });
     expect(adopted.headline).toBe("Sedang saya ketik poin");
-    expect(adopted.kicker).toBe("Baru");
-    expect(adopted.body).toBe("Server.");
+    expect(adopted.kicker).toBe(point.kicker);
+    expect(adopted.body).toBe(point.body);
+    expect(adopted.slides[0]).toMatchObject({ headline: "Cover dari server" });
+    expect(adopted.slides[1]).toMatchObject({
+      kicker: point.kicker,
+      headline: "Sedang saya ketik poin",
+      body: point.body,
+    });
+    expect(adopted.slides[2]).toEqual(pointTwo);
+    expect(adopted.slides[3]).toEqual(cta);
     expect(adopted.headline).not.toBe(nextSlides[0].headline);
   });
 
@@ -603,12 +612,90 @@ describe("review", () => {
     const dirty: EditorTextFields = { ...previous, headline: "Sedang saya ketik" };
     const adopted = adoptServerDraft(previous, dirty, next);
     expect(adopted.headline).toBe("Sedang saya ketik");
-    expect(adopted.kicker).toBe(next.kicker);
+    expect(adopted.kicker).toBe(previous.kicker);
+    expect(adopted.body).toBe(previous.body);
+    expect(adopted.slides).toEqual([
+      { role: "cover", kicker: previous.kicker, headline: "Sedang saya ketik", body: previous.body },
+    ]);
     expect(adopted.caption).toBe(next.caption);
     expect(adopted.hashtagsText).toBe(next.hashtagsText);
-    expect(adopted.body).toBe(next.body);
-    expect(adopted.slides).toEqual(next.slides);
     expect(adopted.altHeadlines).toEqual(next.altHeadlines);
+  });
+
+  it("keeps an edited point on its slide when the format changes", () => {
+    const cover = { role: "cover" as const, kicker: "AI", headline: "Judul cover cukup", body: "Cover." };
+    const point = { role: "point" as const, kicker: "Fakta", headline: "Poin yang sedang tampil", body: "Detail poin." };
+    const cta = { role: "cta" as const, kicker: "Sumber", headline: "Baca lengkapnya di bio", body: "Ke Contoh." };
+    const changed = switchPreviewFormat({
+      slides: [cover, point, cta],
+      fromFormat: "carousel_full",
+      toFormat: "teaser_bio",
+      previewIndex: 1,
+      kicker: point.kicker,
+      headline: "POIN",
+      body: point.body,
+    });
+    expect(changed.index).toBe(0);
+    expect(changed.headline).toBe(cover.headline);
+    expect(changed.kicker).toBe(cover.kicker);
+    expect(changed.body).toBe(cover.body);
+    expect(changed.slides[1]?.headline).toBe("POIN");
+    expect(changed.slides[0]).toEqual(cover);
+    expect(changed.slides[2]).toEqual(cta);
+  });
+
+  it("adopts rewrites of untouched slides and keeps the slide that was edited", () => {
+    const previousSlides: Slide[] = [
+      { role: "cover", kicker: "ck", headline: "A", body: "ca" },
+      { role: "point", kicker: "pk", headline: "B", body: "pb" },
+      { role: "cta", kicker: "tk", headline: "C", body: "cb" },
+    ];
+    const nextSlides: Slide[] = [
+      { role: "cover", kicker: "ck2", headline: "A2", body: "ca2" },
+      { role: "point", kicker: "pk9", headline: "B9", body: "pb9" },
+      { role: "cta", kicker: "tk2", headline: "C2", body: "cb2" },
+    ];
+    const meta = {
+      format: "carousel_full" as const,
+      caption: "Caption dari Contoh.",
+      hashtags: ["iklan"],
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"] as [string, string],
+    };
+    const previousPoint = editorTextFields({ ...meta, slides: previousSlides }, 1);
+    const nextPoint = editorTextFields(
+      { ...meta, slides: nextSlides, caption: "Caption baru dari Contoh." },
+      1,
+    );
+    const viewingPoint = adoptServerDraft(
+      previousPoint,
+      { ...previousPoint, headline: "B2" },
+      nextPoint,
+      { format: "carousel_full", index: 1 },
+    );
+    expect(viewingPoint.slides.map((slide) => slide.headline)).toEqual(["A2", "B2", "C2"]);
+    expect(viewingPoint.slides[0]).toEqual(nextSlides[0]);
+    expect(viewingPoint.slides[1]).toEqual({ role: "point", kicker: "pk", headline: "B2", body: "pb" });
+    expect(viewingPoint.slides[2]).toEqual(nextSlides[2]);
+    expect(viewingPoint.headline).toBe("B2");
+    expect(viewingPoint.caption).toBe("Caption baru dari Contoh.");
+    expect(readPreviewFields("carousel_full", viewingPoint.slides, 1).headline).toBe("B2");
+    expect(readPreviewFields("carousel_full", viewingPoint.slides, 0).headline).toBe("A2");
+
+    const previousCover = editorTextFields({ ...meta, slides: previousSlides }, 0);
+    const nextCover = editorTextFields({ ...meta, slides: nextSlides }, 0);
+    const localSlides = previousSlides.map((slide) =>
+      slide.role === "point" ? { ...slide, headline: "B2" } : slide,
+    );
+    const viewingCover = adoptServerDraft(
+      previousCover,
+      { ...previousCover, slides: localSlides },
+      nextCover,
+      { format: "carousel_full", index: 0 },
+    );
+    expect(viewingCover.headline).toBe("A2");
+    expect(readPreviewFields("carousel_full", viewingCover.slides, 0).headline).toBe("A2");
+    expect(readPreviewFields("carousel_full", viewingCover.slides, 1).headline).toBe("B2");
+    expect(viewingCover.slides.map((slide) => slide.headline)).toEqual(["A2", "B2", "C2"]);
   });
 
   it("treats a focal slider that differs from the saved value as unsaved", () => {

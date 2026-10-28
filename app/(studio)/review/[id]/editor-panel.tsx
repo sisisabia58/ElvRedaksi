@@ -14,6 +14,7 @@ import {
   editorTextFields,
   focalSliderIsUnsaved,
   readPreviewFields,
+  switchPreviewFormat,
   writePreviewFields,
 } from "@/src/studio/editor-sync";
 import { Button } from "@/components/ui/button";
@@ -122,7 +123,7 @@ export function EditorPanel({
       serverBaseline,
       { slides, kicker, headline, body, caption, hashtagsText, altHeadlines },
       next,
-      { format: draft.format, index: clampedIndex },
+      { format, index: clampedIndex },
     );
     setSlides(adopted.slides);
     setKicker(adopted.kicker);
@@ -141,7 +142,7 @@ export function EditorPanel({
       .map((t) => t.replace(/^#/, "").trim())
       .filter(Boolean);
     const updatedSlides = writePreviewFields(
-      draft.format,
+      format,
       omitRejectedCoverPhoto(slides, blockedPhotoUrl),
       clampedIndex,
       { kicker, headline, body },
@@ -163,7 +164,7 @@ export function EditorPanel({
     hashtagsText,
     altHeadlines,
     blockedPhotoUrl,
-    draft.format,
+    format,
     clampedIndex,
   ]);
 
@@ -247,7 +248,7 @@ export function EditorPanel({
     const hashtagsMatch =
       hashtags.length === draft.hashtags.length &&
       hashtags.every((tag, i) => tag === draft.hashtags[i]);
-    const edited = writePreviewFields(draft.format, slides, clampedIndex, { kicker, headline, body });
+    const edited = writePreviewFields(format, slides, clampedIndex, { kicker, headline, body });
     const textChanged =
       edited.length !== draft.slides.length ||
       edited.some((slide, index) => {
@@ -271,13 +272,13 @@ export function EditorPanel({
     draft.caption,
     draft.hashtags,
     draft.slides,
-    draft.format,
+    format,
   ]);
 
   function showPreview(nextIndex: number) {
-    const written = writePreviewFields(draft.format, slides, clampedIndex, { kicker, headline, body });
+    const written = writePreviewFields(format, slides, clampedIndex, { kicker, headline, body });
     const bounded = Math.min(Math.max(nextIndex, 0), Math.max(slideTotal - 1, 0));
-    const text = readPreviewFields(draft.format, written, bounded);
+    const text = readPreviewFields(format, written, bounded);
     setSlides(written);
     setKicker(text.kicker);
     setHeadline(text.headline);
@@ -555,6 +556,22 @@ export function EditorPanel({
                   variant={format === opt.value ? "default" : "outline"}
                   disabled={!canWrite || pending || posting}
                   onClick={() => {
+                    if (opt.value !== format) {
+                      const nextPreview = switchPreviewFormat({
+                        slides,
+                        fromFormat: format,
+                        toFormat: opt.value,
+                        previewIndex: clampedIndex,
+                        kicker,
+                        headline,
+                        body,
+                      });
+                      setSlides(nextPreview.slides);
+                      setKicker(nextPreview.kicker);
+                      setHeadline(nextPreview.headline);
+                      setBody(nextPreview.body);
+                      setSlideIndex(nextPreview.index);
+                    }
                     setFormat(opt.value);
                     run(() => setFormatAction(draft.id, opt.value));
                   }}

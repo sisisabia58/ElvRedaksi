@@ -52,6 +52,24 @@ export function writePreviewFields(
   );
 }
 
+export function switchPreviewFormat(input: {
+  slides: Slide[];
+  fromFormat: DraftFormat;
+  toFormat: DraftFormat;
+  previewIndex: number;
+  kicker: string;
+  headline: string;
+  body: string;
+}): { slides: Slide[]; index: number; kicker: string; headline: string; body: string } {
+  const slides = writePreviewFields(input.fromFormat, input.slides, input.previewIndex, {
+    kicker: input.kicker,
+    headline: input.headline,
+    body: input.body,
+  });
+  const text = readPreviewFields(input.toFormat, slides, 0);
+  return { slides, index: 0, ...text };
+}
+
 export type EditorTextFields = {
   slides: Slide[];
   kicker: string;
@@ -88,6 +106,13 @@ function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function slideTextMatches(left: Slide | undefined, right: Slide | undefined): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  return left.kicker === right.kicker && left.headline === right.headline && left.body === right.body;
+}
+
 export function clampedFocal(value: number): number {
   return Math.min(100, Math.max(0, Math.round(Number(value))));
 }
@@ -117,13 +142,34 @@ export function adoptServerDraft(
 ): EditorTextFields {
   const pick = <K extends keyof EditorTextFields>(key: K): EditorTextFields[K] =>
     sameValue(local[key], previous[key]) ? next[key] : local[key];
-  const previousText = readPreviewFields(preview.format, previous.slides, preview.index);
-  const nextText = readPreviewFields(preview.format, next.slides, preview.index);
+  const localSlides = writePreviewFields(preview.format, local.slides, preview.index, {
+    kicker: local.kicker,
+    headline: local.headline,
+    body: local.body,
+  });
+  const count = Math.max(localSlides.length, previous.slides.length, next.slides.length);
+  const slides: Slide[] = [];
+  for (let i = 0; i < count; i++) {
+    const current = localSlides[i];
+    const incoming = next.slides[i];
+    if (slideTextMatches(current, previous.slides[i]) && incoming) {
+      slides.push(incoming);
+      continue;
+    }
+    if (current) {
+      slides.push(current);
+      continue;
+    }
+    if (incoming) {
+      slides.push(incoming);
+    }
+  }
+  const text = readPreviewFields(preview.format, slides, preview.index);
   return {
-    slides: pick("slides"),
-    kicker: local.kicker === previousText.kicker ? nextText.kicker : local.kicker,
-    headline: local.headline === previousText.headline ? nextText.headline : local.headline,
-    body: local.body === previousText.body ? nextText.body : local.body,
+    slides,
+    kicker: text.kicker,
+    headline: text.headline,
+    body: text.body,
     caption: pick("caption"),
     hashtagsText: pick("hashtagsText"),
     altHeadlines: pick("altHeadlines"),
