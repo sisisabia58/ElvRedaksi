@@ -20,7 +20,7 @@ const anton = Anton({
 
 export const metadata: Metadata = {
   title: "Redaksi",
-  description: "Instagram carousel newsroom",
+  description: "Ruang kerja redaksi untuk menyiapkan carousel Instagram.",
 };
 
 export default function RootLayout({
