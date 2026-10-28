@@ -156,7 +156,22 @@ export function EditorPanel({
       if (typeof dataUrl !== "string") {
         return;
       }
-      run(() => saveCoverPhotoAction(draft.id, dataUrl));
+      setError(null);
+      startTransition(async () => {
+        const result = await saveCoverPhotoAction(draft.id, dataUrl);
+        if (!result.ok) {
+          setError(result.error ?? "Terjadi kesalahan");
+          return;
+        }
+        setSlides((prev) =>
+          prev.map((slide) =>
+            slide.role === "cover"
+              ? ({ ...slide, photoDataUrl: dataUrl } as Slide & { photoDataUrl?: string })
+              : slide,
+          ),
+        );
+        router.refresh();
+      });
     };
     reader.readAsDataURL(file);
   }
@@ -169,7 +184,7 @@ export function EditorPanel({
     window.setTimeout(() => setCopyLabel("Copy caption + hashtag"), 1600);
   }
 
-  const savedCoverHeadline = coverSlide(draft.slides).headline;
+  const savedCover = coverSlide(draft.slides);
 
   const hasUnsavedTextEdits = useMemo(() => {
     const hashtags = hashtagsText
@@ -179,8 +194,25 @@ export function EditorPanel({
     const hashtagsMatch =
       hashtags.length === draft.hashtags.length &&
       hashtags.every((tag, i) => tag === draft.hashtags[i]);
-    return headline !== savedCoverHeadline || caption !== draft.caption || !hashtagsMatch;
-  }, [headline, caption, hashtagsText, draft.caption, draft.hashtags, savedCoverHeadline]);
+    return (
+      headline !== savedCover.headline ||
+      kicker !== savedCover.kicker ||
+      body !== savedCover.body ||
+      caption !== draft.caption ||
+      !hashtagsMatch
+    );
+  }, [
+    headline,
+    kicker,
+    body,
+    caption,
+    hashtagsText,
+    draft.caption,
+    draft.hashtags,
+    savedCover.headline,
+    savedCover.kicker,
+    savedCover.body,
+  ]);
 
   function commitFocalFromInput(input: HTMLInputElement) {
     const value = Number(input.value);

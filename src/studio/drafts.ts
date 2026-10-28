@@ -102,6 +102,34 @@ function coverHeadline(slides: Slide[]): string {
   return cover?.headline ?? "";
 }
 
+type SlideWithPhoto = Slide & { photoDataUrl?: string };
+
+async function cancelUnfinishedPublishJobs(tx: Sql, draftId: string): Promise<void> {
+  await tx.rows(
+    `delete from jobs
+     where name = 'publisher.publish'
+       and finished_at is null
+       and payload->>'draftId' = $1`,
+    [draftId],
+  );
+}
+
+async function transitionDraftStatus(
+  tx: Sql,
+  id: string,
+  from: DraftStatus,
+  to: DraftStatus,
+  now: Date,
+): Promise<void> {
+  const rows = await tx.rows<{ id: string }>(
+    `update drafts set status = $1, updated_at = $2 where id = $3 and status = $4 returning id`,
+    [to, now, id, from],
+  );
+  if (!rows[0]) {
+    throw new Error("Status draf sudah berubah, muat ulang halaman");
+  }
+}
+
 function requireReviewWrite(role: Role): void {
   if (!can(role, "review.write")) {
     throw new Error("forbidden");
@@ -263,10 +291,23 @@ export async function saveDraftText(
   },
 ): Promise<void> {
   requireReviewWrite(role);
-  await loadDraftRow(sql, id);
-  const slides = input.slides.map((slide) =>
-    slide.role === "cover" ? { ...slide, kicker: input.kicker } : slide,
-  );
+  const row = await loadDraftRow(sql, id);
+  const existingSlides = parseSlides(row.slides);
+  const existingCover = existingSlides.find((s) => s.role === "cover");
+  const existingPhoto = existingCover
+    ? (existingCover as SlideWithPhoto).photoDataUrl
+    : undefined;
+  const slides = input.slides.map((slide) => {
+    if (slide.role !== "cover") {
+      return slide;
+    }
+    const cover: SlideWithPhoto = { ...slide, kicker: input.kicker };
+    const incoming = (slide as SlideWithPhoto).photoDataUrl;
+    if (!incoming && existingPhoto) {
+      cover.photoDataUrl = existingPhoto;
+    }
+    return cover;
+  });
   await sql.rows(
     `update drafts set slides = $1::jsonb, caption = $2, hashtags = $3::jsonb, alt_headlines = $4::jsonb,
      text_dirty = true, updated_at = now() where id = $5`,
@@ -380,11 +421,14 @@ export async function scheduleDraft(
   });
 }
 
-async function postDraftNowInTx(tx: Sql, role: Role, id: string, row: DraftRow, now: Date): Promise<void> {
+async function postDraftNowInTx(tx: Sql, id: string, row: DraftRow, now: Date): Promise<void> {
+  await cancelUnfinishedPublishJobs(tx, id);
   if (row.status === "needs_review") {
-    await tx.rows(`update drafts set status = 'approved', updated_at = $1 where id = $2`, [now, id]);
+    await transitionDraftStatus(tx, id, "needs_review", "approved", now);
+    await transitionDraftStatus(tx, id, "approved", "posting", now);
+  } else {
+    await transitionDraftStatus(tx, id, row.status, "posting", now);
   }
-  await tx.rows(`update drafts set status = 'posting', updated_at = $1 where id = $2`, [now, id]);
   await enqueue(tx, {
     name: "publisher.publish",
     payload: { draftId: id },
@@ -401,10 +445,10 @@ export async function postDraftNow(sql: Sql, role: Role, id: string): Promise<vo
   if (row.status === "needs_review") {
     assertTransition("human", "needs_review", "approved");
   }
-  const current = row.status === "needs_review" ? "approved" : row.status;
-  assertTransition("human", current as DraftStatus, "posting");
+  const fromForPosting: DraftStatus = row.status === "needs_review" ? "approved" : row.status;
+  assertTransition("human", fromForPosting, "posting");
   await sql.tx(async (tx) => {
-    await postDraftNowInTx(tx, role, id, row, now);
+    await postDraftNowInTx(tx, id, row, now);
   });
 }
 
@@ -423,7 +467,10 @@ export async function rejectDraft(sql: Sql, role: Role, id: string): Promise<voi
   requireReviewWrite(role);
   const row = await loadDraftRow(sql, id);
   assertTransition("human", row.status, "rejected");
-  await sql.rows(`update drafts set status = 'rejected', updated_at = now() where id = $1`, [id]);
+  await sql.tx(async (tx) => {
+    await cancelUnfinishedPublishJobs(tx, id);
+    await tx.rows(`update drafts set status = 'rejected', updated_at = now() where id = $1`, [id]);
+  });
 }
 
 export async function deleteDraft(sql: Sql, role: Role, id: string): Promise<void> {
@@ -433,16 +480,21 @@ export async function deleteDraft(sql: Sql, role: Role, id: string): Promise<voi
     throw new Error("Tidak bisa hapus saat posting");
   }
   await sql.tx(async (tx) => {
+    await cancelUnfinishedPublishJobs(tx, id);
     await tx.rows(`delete from drafts where id = $1`, [id]);
     await tx.rows(`update topics set state = 'passed' where id = $1`, [row.topic_id]);
   });
 }
 
 async function retryFailedInTx(tx: Sql, id: string, now: Date): Promise<void> {
-  await tx.rows(
-    `update drafts set status = 'posting', error = null, updated_at = $1 where id = $2`,
+  await cancelUnfinishedPublishJobs(tx, id);
+  const rows = await tx.rows<{ id: string }>(
+    `update drafts set status = 'posting', error = null, updated_at = $1 where id = $2 and status = 'failed' returning id`,
     [now, id],
   );
+  if (!rows[0]) {
+    throw new Error("Status draf sudah berubah, muat ulang halaman");
+  }
   await enqueue(tx, {
     name: "publisher.publish",
     payload: { draftId: id },

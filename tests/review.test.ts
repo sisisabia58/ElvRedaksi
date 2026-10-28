@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
-import { approveDraft, listDrafts, markPostedManually, postDraftNow, saveDraftText } from "../src/studio/drafts";
+import { approveDraft, listDrafts, markPostedManually, postDraftNow, rejectDraft, retryFailed, saveCoverPhoto, saveDraftText } from "../src/studio/drafts";
+import { enqueue } from "../src/jobs/runner";
 
 async function seedDraft(sql: Awaited<ReturnType<typeof createTestSql>>, dirty: boolean) {
   await seedDefaults(sql);
@@ -52,5 +53,60 @@ describe("review", () => {
     expect(rows[0]).toMatchObject({ manual: true, sensitive: true, sourceName: "Contoh" });
     const jobs = await sql.rows("select id from jobs where name = 'publisher.publish'");
     expect(jobs).toHaveLength(0);
+  });
+
+  it("keeps cover photoDataUrl when saveDraftText omits it", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    const photo = "data:image/png;base64,iVBORw0KGgo";
+    await sql.rows(`update drafts set slides = $1::jsonb where id = $2`, [
+      JSON.stringify([{ role: "cover", kicker: "AI", headline: "Judul lama cukup", body: "Isi." }]),
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+    ]);
+    await saveCoverPhoto(sql, "social_media", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", photo);
+    await saveDraftText(sql, "social_media", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", {
+      slides: [{ role: "cover", kicker: "AI", headline: "Judul baru yang cukup", body: "Isi." }],
+      caption: "Dari Contoh.",
+      hashtags: ["iklan"],
+      altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+      kicker: "AI",
+    });
+    const rows = await sql.rows<{ slides: string }>("select slides from drafts where id = $1", [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+    ]);
+    const raw = rows[0].slides;
+    const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+      role: string;
+      photoDataUrl?: string;
+    }[];
+    expect(stored.find((s) => s.role === "cover")?.photoDataUrl).toBe(photo);
+  });
+
+  it("cancels scheduled publish jobs when rejecting", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'scheduled' where id = $1`, [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+    ]);
+    await enqueue(sql, {
+      name: "publisher.publish",
+      payload: { draftId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1" },
+      runAt: new Date(Date.now() + 3600_000),
+    });
+    await rejectDraft(sql, "social_media", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1");
+    const jobs = await sql.rows("select id from jobs where name = 'publisher.publish'");
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("does not enqueue twice when retry is called after posting", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'failed', error = 'gagal' where id = $1`, [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+    ]);
+    await retryFailed(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1");
+    await expect(retryFailed(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1")).rejects.toThrow();
+    const jobs = await sql.rows("select id from jobs where name = 'publisher.publish'");
+    expect(jobs).toHaveLength(1);
   });
 });
