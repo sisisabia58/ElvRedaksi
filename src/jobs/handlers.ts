@@ -548,8 +548,6 @@ class SupersededRenderError extends Error {
 }
 
 export async function runDesigner(ctx: DesignerCtx): Promise<void> {
-  const ownedRasterizer = ctx.rasterizer === undefined;
-  const rasterizer = ctx.rasterizer ?? new PlaywrightRasterizer();
   const draftId = ctx.payload.draftId;
   if (typeof draftId !== "string" || !draftId) {
     throw new Error("draft tidak ditemukan");
@@ -579,6 +577,12 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   if (!draft) {
     throw new Error("draft tidak ditemukan");
   }
+  if (draft.status === "posting") {
+    return;
+  }
+
+  const ownedRasterizer = ctx.rasterizer === undefined;
+  const rasterizer = ctx.rasterizer ?? new PlaywrightRasterizer();
 
   const allSlides: Slide[] =
     typeof draft.slides === "string" ? (JSON.parse(draft.slides) as Slide[]) : draft.slides;

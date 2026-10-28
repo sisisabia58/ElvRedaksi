@@ -12,6 +12,7 @@ import {
   bulkRejectDrafts,
   bulkScheduleDrafts,
   deleteDraft,
+  getDraft,
   markPostedManually,
   postDraftNow,
   rejectDraft,
@@ -48,6 +49,16 @@ function revalidateReview(id?: string) {
   revalidatePath("/review");
   if (id) {
     revalidatePath(`/review/${id}`);
+  }
+}
+
+async function refusePostingDraft(
+  sql: Awaited<ReturnType<typeof getAppSql>>,
+  id: string,
+): Promise<void> {
+  const draft = await getDraft(sql, id);
+  if (draft?.status === "posting") {
+    throw new Error("Draf sedang diposting");
   }
 }
 
@@ -184,7 +195,9 @@ export async function saveDraftTextAction(id: string, input: SaveInput): Promise
 export async function saveAndRenderAction(id: string, input: SaveInput): Promise<ActionResult> {
   try {
     const { sql, role } = await sessionUser();
+    await refusePostingDraft(sql, id);
     await saveDraftText(sql, role, id, input);
+    await refusePostingDraft(sql, id);
     await enqueue(sql, {
       name: "designer.render",
       payload: { draftId: id },
@@ -273,6 +286,7 @@ export async function renderAgainAction(id: string): Promise<ActionResult> {
     if (!can(role, "review.write")) {
       throw new Error("forbidden");
     }
+    await refusePostingDraft(sql, id);
     await enqueue(sql, {
       name: "designer.render",
       payload: { draftId: id },

@@ -64,11 +64,11 @@ async function readDraft(sql: Awaited<ReturnType<typeof createTestSql>>, id: str
     status: string;
     text_dirty: boolean;
     focal_y: number;
-    slides: string | { role: string; photoDataUrl?: string }[];
+    slides: string | { role: string; headline?: string; photoDataUrl?: string }[];
   }>("select status, text_dirty, focal_y, slides from drafts where id = $1", [id]);
   const row = rows[0];
   const slides = typeof row.slides === "string" ? JSON.parse(row.slides) : row.slides;
-  return { ...row, slides: slides as { role: string; photoDataUrl?: string }[] };
+  return { ...row, slides: slides as { role: string; headline?: string; photoDataUrl?: string }[] };
 }
 
 async function seedDraft(sql: Awaited<ReturnType<typeof createTestSql>>, dirty: boolean) {
@@ -442,27 +442,38 @@ describe("review", () => {
     expect(jobs).toHaveLength(1);
   });
 
-  it("keeps the in-flight publisher when text is saved during posting", async () => {
+  it("rejects a text save while the draft is posting", async () => {
     const sql = await createTestSql();
     await seedDraft(sql, false);
-    await sql.rows(`update drafts set status = 'posting' where id = $1`, [DRAFT_ID]);
+    const headline = "Judul yang sudah disetujui";
+    await sql.rows(
+      `update drafts set status = 'posting', text_dirty = false, slides = $2::jsonb where id = $1`,
+      [
+        DRAFT_ID,
+        JSON.stringify([{ role: "cover", kicker: "AI", headline, body: "Isi." }]),
+      ],
+    );
     await enqueue(sql, {
       name: "publisher.publish",
       payload: { draftId: DRAFT_ID },
       runAt: new Date(),
       manual: true,
     });
-    await saveDraftText(sql, "social_media", DRAFT_ID, {
-      slides: [{ role: "cover", kicker: "AI", headline: "Judul baru yang cukup", body: "Isi." }],
-      caption: "Dari Contoh.",
-      hashtags: ["iklan"],
-      altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
-      kicker: "AI",
-    });
-    expect(await readDraft(sql, DRAFT_ID)).toMatchObject({
+    await expect(
+      saveDraftText(sql, "social_media", DRAFT_ID, {
+        slides: [{ role: "cover", kicker: "AI", headline: "Judul baru yang cukup", body: "Isi." }],
+        caption: "Dari Contoh.",
+        hashtags: ["iklan"],
+        altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+        kicker: "AI",
+      }),
+    ).rejects.toThrow("Draf sedang diposting");
+    const draft = await readDraft(sql, DRAFT_ID);
+    expect(draft).toMatchObject({
       status: "posting",
-      text_dirty: true,
+      text_dirty: false,
     });
+    expect(draft.slides[0]?.headline).toBe(headline);
     const jobs = await sql.rows(
       `select id from jobs
        where name = 'publisher.publish' and finished_at is null and payload->>'draftId' = $1`,

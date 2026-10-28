@@ -157,6 +157,12 @@ export async function withLockedDraftEdit(
   if (!locked) {
     throw new Error("draft tidak ditemukan");
   }
+  if (locked.status === "posting") {
+    if (mode === "human") {
+      throw new Error("Draf sedang diposting");
+    }
+    return false;
+  }
   let nextStatus: DraftStatus = locked.status;
   if (locked.status === "scheduled") {
     if (mode === "human") {
@@ -168,9 +174,7 @@ export async function withLockedDraftEdit(
   if (updated.length === 0) {
     return false;
   }
-  if (locked.status !== "posting") {
-    await cancelUnfinishedPublishJobs(tx, id);
-  }
+  await cancelUnfinishedPublishJobs(tx, id);
   return true;
 }
 
@@ -396,7 +400,7 @@ export async function saveFocal(sql: Sql, role: Role, id: string, focalY: number
   requireReviewWrite(role);
   const row = await loadDraftRow(sql, id);
   const clamped = Math.min(100, Math.max(0, Math.round(focalY)));
-  if (Number(row.focal_y) === clamped) {
+  if (row.status !== "posting" && Number(row.focal_y) === clamped) {
     return;
   }
   await sql.tx(async (tx) => {
@@ -422,7 +426,7 @@ export async function setFormat(
 ): Promise<void> {
   requireReviewWrite(role);
   const row = await loadDraftRow(sql, id);
-  if (row.format === format) {
+  if (row.status !== "posting" && row.format === format) {
     return;
   }
   await sql.tx(async (tx) => {
@@ -448,7 +452,7 @@ export async function setTemplate(
 ): Promise<void> {
   requireReviewWrite(role);
   const row = await loadDraftRow(sql, id);
-  if (row.template === template) {
+  if (row.status !== "posting" && row.template === template) {
     return;
   }
   await sql.tx(async (tx) => {

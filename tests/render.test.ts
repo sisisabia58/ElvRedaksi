@@ -62,7 +62,7 @@ async function expectPriorAssets(sql: Awaited<ReturnType<typeof createTestSql>>)
   ]);
 }
 
-async function seedDesignerDraft(status: "drafted" | "needs_review") {
+async function seedDesignerDraft(status: "drafted" | "needs_review" | "posting") {
   const sql = await createTestSql();
   await seedDefaults(sql);
   await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
@@ -366,6 +366,31 @@ describe("designer", () => {
     expect(status[0]).toMatchObject({ status: "drafted", text_dirty: false, error: "raster failed" });
     const log = await sql.rows("select id from activity where agent = 'designer'");
     expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
+  });
+
+  it("leaves assets and text_dirty when the draft is already posting", async () => {
+    const sql = await seedDesignerDraft("posting");
+    await sql.rows(`update drafts set text_dirty = true where id = $1`, [DRAFT_ID]);
+    await insertPriorAssets(sql);
+    let rasterized = 0;
+    await runDesigner({
+      sql,
+      payload: { draftId: DRAFT_ID },
+      manual: true,
+      now: new Date(),
+      rasterizer: {
+        async toPng() {
+          rasterized += 1;
+          return Buffer.from("replacement");
+        },
+      },
+    });
+    expect(rasterized).toBe(0);
+    const status = await sql.rows<{ status: string; text_dirty: boolean; error: string | null }>(
+      "select status, text_dirty, error from drafts",
+    );
+    expect(status[0]).toMatchObject({ status: "posting", text_dirty: true, error: null });
     await expectPriorAssets(sql);
   });
 

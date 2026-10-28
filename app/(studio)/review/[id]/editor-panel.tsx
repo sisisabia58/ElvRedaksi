@@ -285,6 +285,7 @@ export function EditorPanel({
     setSlideIndex(bounded);
   }
 
+  const posting = draft.status === "posting";
   const showApprove = canPublish && reviewActionVisible(draft.status, "approve");
   const showSchedule = canPublish && reviewActionVisible(draft.status, "schedule");
   const showReject = canWrite && reviewActionVisible(draft.status, "reject");
@@ -380,7 +381,7 @@ export function EditorPanel({
                   min={0}
                   max={100}
                   value={focalY}
-                  disabled={!canWrite || pending}
+                  disabled={!canWrite || pending || posting}
                   className="mt-2 w-full"
                   onChange={(e) => setFocalY(Number(e.target.value))}
                   onPointerDown={(e) => {
@@ -391,7 +392,7 @@ export function EditorPanel({
                   onBlur={(e) => commitFocalFromInput(e.currentTarget)}
                 />
               </label>
-              {canWrite ? (
+              {canWrite && !posting ? (
                 <label className="block text-sm">
                   Ganti gambar
                   <Input
@@ -424,6 +425,8 @@ export function EditorPanel({
               /s/{draft.shortCode} · {draft.clickCount} klik
             </p>
           </div>
+
+          {posting ? <p className="text-sm text-amber-200">Draf sedang diposting</p> : null}
 
           {publishBlocked ? (
             <p className="text-sm text-amber-200">Render dulu teks yang baru</p>
@@ -529,7 +532,7 @@ export function EditorPanel({
                   type="button"
                   size="sm"
                   variant={template === opt.value ? "default" : "outline"}
-                  disabled={!canWrite || pending}
+                  disabled={!canWrite || pending || posting}
                   onClick={() => {
                     setTemplate(opt.value);
                     run(() => setTemplateAction(draft.id, opt.value));
@@ -550,7 +553,7 @@ export function EditorPanel({
                   type="button"
                   size="sm"
                   variant={format === opt.value ? "default" : "outline"}
-                  disabled={!canWrite || pending}
+                  disabled={!canWrite || pending || posting}
                   onClick={() => {
                     setFormat(opt.value);
                     run(() => setFormatAction(draft.id, opt.value));
@@ -573,30 +576,35 @@ export function EditorPanel({
                 value={kicker}
                 onChange={(e) => setKicker(e.target.value)}
                 placeholder="Kicker"
+                disabled={posting}
                 className="border-[var(--line)]"
               />
               <Input
                 value={headline}
                 onChange={(e) => setHeadline(e.target.value)}
                 placeholder="Headline"
+                disabled={posting}
                 className="border-[var(--line)]"
               />
               <Textarea
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 placeholder="Isi cover"
+                disabled={posting}
                 className="border-[var(--line)] min-h-[80px]"
               />
               <Textarea
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
                 placeholder="Caption"
+                disabled={posting}
                 className="border-[var(--line)] min-h-[80px]"
               />
               <Input
                 value={hashtagsText}
                 onChange={(e) => setHashtagsText(e.target.value)}
                 placeholder="hashtag1, hashtag2"
+                disabled={posting}
                 className="border-[var(--line)]"
               />
               <div className="flex flex-wrap gap-2">
@@ -606,37 +614,40 @@ export function EditorPanel({
                     type="button"
                     size="sm"
                     variant="outline"
+                    disabled={posting}
                     onClick={() => setHeadline(alt)}
                   >
                     {alt}
                   </Button>
                 ))}
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => run(() => saveAndRenderAction(draft.id, savePayload))}
-                >
-                  Simpan & render ulang
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={pending}
-                  onClick={() => run(() => saveDraftTextAction(draft.id, savePayload))}
-                >
-                  Simpan teks saja
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={pending}
-                  onClick={() => run(() => rewriteCopyAction(draft.topicId))}
-                >
-                  Tulis ulang
-                </Button>
-              </div>
+              {posting ? null : (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => run(() => saveAndRenderAction(draft.id, savePayload))}
+                  >
+                    Simpan & render ulang
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={pending}
+                    onClick={() => run(() => saveDraftTextAction(draft.id, savePayload))}
+                  >
+                    Simpan teks saja
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() => run(() => rewriteCopyAction(draft.topicId))}
+                  >
+                    Tulis ulang
+                  </Button>
+                </div>
+              )}
             </div>
           ) : null}
 
@@ -644,7 +655,7 @@ export function EditorPanel({
             <Button type="button" variant="outline" size="sm" onClick={copyCaption}>
               {copyLabel}
             </Button>
-            {canWrite ? (
+            {canWrite && !posting ? (
               <Button
                 type="button"
                 variant="outline"
