@@ -6,7 +6,7 @@ import { makeShortCode } from "../domain/code";
 import { PASS_THRESHOLD_DEFAULT, SCOUT_INTERVAL_MS } from "../domain/constants";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
-import { renderSlideHtml, slidesForFormat, type SlideTemplate } from "../render/html";
+import { renderSlideHtml, safePhotoDataUrl, slidesForFormat, type SlideTemplate } from "../render/html";
 import { PlaywrightRasterizer, type Rasterizer } from "../render/raster";
 import { createLlm, type LlmProvider } from "../llm/provider";
 import { fetchPublicText } from "../rss/fetch-guard";
@@ -493,6 +493,20 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
 
 export type DesignerCtx = JobCtx & { rasterizer?: Rasterizer };
 
+type SlideWithPhoto = Slide & { photoDataUrl?: string };
+
+function photoInputForSlide(
+  slide: Slide,
+  draftFocalY: number,
+): { photoDataUrl: string | null; focalY: number } {
+  if (slide.role !== "cover") {
+    return { photoDataUrl: null, focalY: draftFocalY };
+  }
+  const raw = (slide as SlideWithPhoto).photoDataUrl;
+  const photoDataUrl = safePhotoDataUrl(typeof raw === "string" ? raw : null);
+  return { photoDataUrl, focalY: draftFocalY };
+}
+
 export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const ownedRasterizer = ctx.rasterizer === undefined;
   const rasterizer = ctx.rasterizer ?? new PlaywrightRasterizer();
@@ -537,16 +551,18 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   try {
     try {
       for (let index = 0; index < selected.length; index++) {
+        const slide = selected[index];
+        const { photoDataUrl, focalY } = photoInputForSlide(slide, draft.focal_y);
         const html = renderSlideHtml({
           template,
-          slide: selected[index],
+          slide,
           index,
           total: selected.length,
           handle: draft.handle,
           sourceName: draft.source_name,
           accent: draft.accent,
-          focalY: draft.focal_y,
-          photoDataUrl: null,
+          focalY,
+          photoDataUrl,
         });
         const bytes = await rasterizer.toPng(html);
         await ctx.sql.rows(

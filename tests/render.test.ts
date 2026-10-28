@@ -99,4 +99,55 @@ describe("designer", () => {
     const log = await sql.rows<{ message: string }>("select message from activity where agent = 'designer'");
     expect(log[0].message).toBe('Gambar selesai untuk "Iklan baru bisa nyamar"');
   });
+
+  it("rasterizes an uploaded cover photo from slide json", async () => {
+    const coverPhoto = "data:image/png;base64,iVBORw0KGgo";
+    const slidesWithPhoto = [{ ...slides[0], photoDataUrl: coverPhoto }, ...slides.slice(1)];
+    const captured: string[] = [];
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, state) values ($1,$2,$3,$4,'drafted')",
+      [
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+        "11111111-1111-1111-1111-111111111111",
+        "Iklan",
+        "https://news.example/a",
+      ],
+    );
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, focal_y)
+       values ($1,$2,'drafted','teaser_bio','serif',$3::jsonb,'cap',$4::jsonb,$5::jsonb,'abcde',72)`,
+      [
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+        JSON.stringify(slidesWithPhoto),
+        JSON.stringify(["iklan"]),
+        JSON.stringify(["Alt satu cukup", "Alt dua cukup"]),
+      ],
+    );
+    await runDesigner({
+      sql,
+      payload: { draftId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1" },
+      manual: true,
+      now: new Date(),
+      rasterizer: {
+        toPng: async (html) => {
+          captured.push(html);
+          return Buffer.from("png");
+        },
+        close: async () => {},
+      },
+    });
+    expect(captured[0]).toContain("<img");
+    expect(captured[0]).toContain(coverPhoto);
+    expect(captured[0]).toContain("center 72%");
+    expect(captured[1]).not.toContain(coverPhoto);
+  });
 });
