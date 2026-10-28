@@ -148,7 +148,7 @@ async function scoreOneTopic(
   ctx: AnalystCtx,
   llm: LlmProvider,
   topicId: string,
-): Promise<{ passed: boolean }> {
+): Promise<{ passed: boolean; valid: boolean }> {
   const topics = await ctx.sql.rows<{
     id: string;
     title: string;
@@ -166,7 +166,7 @@ async function scoreOneTopic(
   );
   const topic = topics[0];
   if (!topic) {
-    return { passed: false };
+    return { passed: false, valid: false };
   }
 
   const brain = await loadBrain(ctx.sql);
@@ -204,7 +204,7 @@ async function scoreOneTopic(
       "analis",
       `Gagal menilai "${topic.title}"`,
     ]);
-    return { passed: false };
+    return { passed: false, valid: false };
   }
 
   const threshold = await loadPassThreshold(ctx.sql);
@@ -249,7 +249,7 @@ async function scoreOneTopic(
     });
   }
 
-  return { passed };
+  return { passed, valid: true };
 }
 
 export async function runAnalyst(ctx: AnalystCtx): Promise<void> {
@@ -260,18 +260,24 @@ export async function runAnalyst(ctx: AnalystCtx): Promise<void> {
     const waiting = await ctx.sql.rows<{ id: string }>(
       `select id from topics where state = 'new' order by discovered_at asc limit 20`,
     );
+    let validCount = 0;
     let passedCount = 0;
     for (const row of waiting) {
       const outcome = await scoreOneTopic(ctx, llm, row.id);
-      if (outcome.passed) {
-        passedCount += 1;
+      if (outcome.valid) {
+        validCount += 1;
+        if (outcome.passed) {
+          passedCount += 1;
+        }
       }
     }
-    await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
-      randomUUID(),
-      "analis",
-      `Menilai ${waiting.length} topik, ${passedCount} lolos ambang skor ${threshold}`,
-    ]);
+    if (validCount > 0) {
+      await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+        randomUUID(),
+        "analis",
+        `Menilai ${validCount} topik, ${passedCount} lolos ambang skor ${threshold}`,
+      ]);
+    }
     return;
   }
 
@@ -281,11 +287,13 @@ export async function runAnalyst(ctx: AnalystCtx): Promise<void> {
   }
 
   const outcome = await scoreOneTopic(ctx, llm, topicId);
-  await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
-    randomUUID(),
-    "analis",
-    `Menilai 1 topik, ${outcome.passed ? 1 : 0} lolos ambang skor ${threshold}`,
-  ]);
+  if (outcome.valid) {
+    await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+      randomUUID(),
+      "analis",
+      `Menilai 1 topik, ${outcome.passed ? 1 : 0} lolos ambang skor ${threshold}`,
+    ]);
+  }
 }
 
 export async function runCopywriter(_ctx: JobCtx): Promise<void> {}

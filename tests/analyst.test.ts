@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DemoLlm } from "../src/llm/provider";
+import { DemoLlm, ScriptedLlm } from "../src/llm/provider";
 import { scoreTopic } from "../src/agents/analyst";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
@@ -74,5 +74,39 @@ describe("analyst", () => {
     );
     expect(queued).toHaveLength(2);
     expect(queued.every((job) => job.manual === false)).toBe(true);
+  });
+
+  it("logs only failure activity when the score JSON is invalid", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const source = "22222222-2222-2222-2222-222222222222";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      source,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, summary) values ($1,$2,$3,$4,$5)",
+      [
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+        source,
+        "Rusak",
+        "https://news.example/bad",
+        "cuplikan",
+      ],
+    );
+    const llm = new ScriptedLlm(["{not valid json"]);
+    await runAnalyst({
+      sql,
+      payload: { topicId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1" },
+      manual: true,
+      now: new Date(),
+      llm,
+    });
+    const log = await sql.rows<{ message: string }>(
+      "select message from activity where agent = 'analis' order by created_at",
+    );
+    expect(log.map((row) => row.message)).toEqual(['Gagal menilai "Rusak"']);
   });
 });
