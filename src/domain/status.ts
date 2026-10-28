@@ -72,7 +72,8 @@ export function reviewActionVisible(status: DraftStatus, action: ReviewAction): 
     case "reject":
       return humanTransitionAllowed(status, "rejected");
     case "post_now":
-      return humanTransitionAllowed(status, "posting");
+      // postDraftNow steps needs_review → approved → posting; that path is not a direct edge.
+      return status === "needs_review" || humanTransitionAllowed(status, "posting");
     case "posted_manual":
       return humanTransitionAllowed(status, "posted", true);
     case "retry":

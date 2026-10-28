@@ -36,6 +36,8 @@ describe("draft gate", () => {
     expect(reviewActionVisible("needs_review", "approve")).toBe(true);
     expect(reviewActionVisible("needs_review", "posted_manual")).toBe(true);
     expect(reviewActionVisible("approved", "post_now")).toBe(true);
+    expect(reviewActionVisible("needs_review", "post_now")).toBe(true);
+    expect(reviewActionVisible("rejected", "post_now")).toBe(false);
     expect(reviewActionVisible("posted", "approve")).toBe(false);
   });
 
