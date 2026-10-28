@@ -34,7 +34,7 @@ async function seedPostedDrafts(sql: Awaited<ReturnType<typeof createTestSql>>) 
   );
   await sql.rows(
     `insert into drafts (${draftCols}) values ($1,$2,'posted','teaser_bio','serif','[]'::jsonb,'c','[]'::jsonb,'[]'::jsonb,$3,$4)`,
-    [DRAFT_NEXT_WEEK, TOPIC_B, "code2", "2026-11-02T17:00:00Z"],
+    [DRAFT_NEXT_WEEK, TOPIC_B, "code2", "2026-11-01T17:00:00Z"],
   );
 }
 

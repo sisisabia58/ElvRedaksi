@@ -27,7 +27,7 @@ export function StudioNavLinks({
 
   const listClass =
     orientation === "horizontal"
-      ? "flex gap-2 overflow-x-auto pb-1 px-4"
+      ? "flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1 px-4"
       : "flex flex-col gap-1 px-3";
 
   return (
