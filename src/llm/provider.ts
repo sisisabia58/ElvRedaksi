@@ -54,13 +54,13 @@ export class DemoLlm implements LlmProvider {
     if (req.purpose === "score") {
       return {
         text: JSON.stringify(demoScorePayload(req.user)),
-        costUsd: 0.002,
+        costUsd: 0,
         model: "demo",
       };
     }
     return {
       text: JSON.stringify(demoCopyPayload(req.user)),
-      costUsd: 0.01,
+      costUsd: 0,
       model: "demo",
     };
   }

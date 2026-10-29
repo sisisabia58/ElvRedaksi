@@ -40,7 +40,9 @@ Then sign in at `http://127.0.0.1:43123/login`. Login is invite-only after that.
 
 Defaults are local fakes: `LLM_PROVIDER=demo` and `META_PROVIDER=fake`. Demo scoring and copy stay on the machine. Fake publish does not call Instagram.
 
-To use OpenAI, set:
+Demo mode does not call a model. Scoring and copy are fixed local payloads (every passing topic scores 80 and is tagged marketing). Slide images are screenshots of the in-app HTML templates (Playwright), not an image API. Demo rows are stored with `model = demo` and `cost_usd = 0`. The studio header shows those figures as simulasi and $0 until `LLM_PROVIDER=openai`.
+
+To use OpenAI for scoring and copy, set:
 
 ```bash
 LLM_PROVIDER=openai

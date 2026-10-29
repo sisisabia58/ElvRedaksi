@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { ZodError } from "zod";
+import { changeOwnPassword } from "@/src/auth/account";
 import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import type { SettingsInput } from "@/src/studio/settings";
@@ -56,6 +57,25 @@ export async function saveInstagramConnectAction(
       igUserId,
       accessToken,
       username,
+    });
+    revalidatePath("/pengaturan");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
+}
+
+export async function changePasswordAction(
+  currentPassword: string,
+  nextPassword: string,
+  confirmPassword: string,
+): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireAdmin();
+    await changeOwnPassword(sql, user.id, {
+      current: currentPassword,
+      next: nextPassword,
+      confirm: confirmPassword,
     });
     revalidatePath("/pengaturan");
     return { ok: true };

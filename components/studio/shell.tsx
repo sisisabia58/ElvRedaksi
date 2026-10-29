@@ -37,6 +37,10 @@ export default async function Shell({
   const brandRows = await sql.rows<{ handle: string }>("select handle from brand where id = 1");
   const handle = brandRows[0]?.handle ?? "redaksi";
   const spend = await spendSummary(sql, new Date());
+  const demoAi = (process.env.LLM_PROVIDER ?? "demo") !== "openai";
+  const todayUsd = demoAi ? 0 : spend.today;
+  const monthUsd = demoAi ? 0 : spend.month;
+  const spendNote = demoAi ? " (simulasi)" : "";
   const reviewRows = await sql.rows<{ count: string }>(
     "select count(*)::int as count from drafts where status = 'needs_review'",
   );
@@ -84,10 +88,12 @@ export default async function Shell({
           </p>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--muted)] ml-auto">
             <span>
-              AI Hari ini <span className="font-mono text-[var(--ink)]">{formatUsd(spend.today)}</span>
+              AI Hari ini{spendNote}{" "}
+              <span className="font-mono text-[var(--ink)]">{formatUsd(todayUsd)}</span>
             </span>
             <span>
-              Bulan ini <span className="font-mono text-[var(--ink)]">{formatUsd(spend.month)}</span>
+              Bulan ini{spendNote}{" "}
+              <span className="font-mono text-[var(--ink)]">{formatUsd(monthUsd)}</span>
             </span>
           </div>
         </header>

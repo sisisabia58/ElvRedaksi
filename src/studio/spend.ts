@@ -11,7 +11,8 @@ export async function spendSummary(sql: Sql, now: Date): Promise<{ today: number
          when date_trunc('month', created_at at time zone '${TIME_ZONE}')
            = date_trunc('month', $1 at time zone '${TIME_ZONE}')
          then cost_usd else 0 end), 0) as month
-     from llm_spend`,
+     from llm_spend
+     where model <> 'demo'`,
     [now],
   );
   const row = rows[0];

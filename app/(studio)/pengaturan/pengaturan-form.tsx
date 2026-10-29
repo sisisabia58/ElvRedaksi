@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
 import type { Settings, SettingsInput } from "@/src/studio/settings";
 import {
+  changePasswordAction,
   disconnectInstagramAction,
   saveInstagramConnectAction,
   saveSettingsAction,
@@ -44,6 +45,13 @@ export function PengaturanForm({
   const [pending, startTransition] = useTransition();
   const [brandError, setBrandError] = useState<string | null>(null);
   const [igError, setIgError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSaved, setPasswordSaved] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    current: "",
+    next: "",
+    confirm: "",
+  });
   const [brand, setBrand] = useState<SettingsInput>(() => brandFromSettings(settings));
   const [igConnect, setIgConnect] = useState({
     igUserId: "",
@@ -60,6 +68,25 @@ export function PengaturanForm({
         router.refresh();
       } else {
         setBrandError(result.error);
+      }
+    });
+  }
+
+  function onPasswordSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    startTransition(async () => {
+      const result = await changePasswordAction(
+        passwordForm.current,
+        passwordForm.next,
+        passwordForm.confirm,
+      );
+      if (result.ok) {
+        setPasswordError(null);
+        setPasswordSaved(true);
+        setPasswordForm({ current: "", next: "", confirm: "" });
+      } else {
+        setPasswordSaved(false);
+        setPasswordError(result.error);
       }
     });
   }
@@ -95,9 +122,55 @@ export function PengaturanForm({
       ) : null}
       {showLlmBanner ? (
         <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
-          AI demo: skor dan naskah dibuat lokal, tanpa biaya.
+          AI demo: skor dan naskah dibuat lokal, tanpa biaya. Angka di header studio bertuliskan simulasi dan menunjukkan $0.
         </p>
       ) : null}
+
+      <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+          Password akun
+        </h2>
+        <p className="text-sm text-[var(--muted)]">
+          Mengganti password untuk akun yang sedang masuk. Sesi ini tetap aktif.
+        </p>
+        <form className="space-y-3" onSubmit={onPasswordSubmit}>
+          <ControlledField
+            label="Password saat ini"
+            type="password"
+            value={passwordForm.current}
+            autoComplete="current-password"
+            required
+            onChange={(value) => setPasswordForm((form) => ({ ...form, current: value }))}
+          />
+          <ControlledField
+            label="Password baru"
+            type="password"
+            value={passwordForm.next}
+            autoComplete="new-password"
+            required
+            onChange={(value) => setPasswordForm((form) => ({ ...form, next: value }))}
+          />
+          <ControlledField
+            label="Ulangi password baru"
+            type="password"
+            value={passwordForm.confirm}
+            autoComplete="new-password"
+            required
+            onChange={(value) => setPasswordForm((form) => ({ ...form, confirm: value }))}
+          />
+          {passwordError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {passwordError}
+            </p>
+          ) : null}
+          {passwordSaved ? (
+            <p className="text-sm text-[var(--muted)]">Password tersimpan.</p>
+          ) : null}
+          <Button type="submit" disabled={pending}>
+            Ganti password
+          </Button>
+        </form>
+      </section>
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Merek</h2>
