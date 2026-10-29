@@ -398,7 +398,11 @@ async function fetchPinnedUrl(
 ): Promise<{ response: Awaited<ReturnType<typeof undiciFetch>>; close: () => Promise<void> }> {
   const dispatcher = new Agent({
     connect: {
-      lookup: createPinnedLookup(hostname, addresses),
+      // createPinnedLookup matches Node's lookup callback at runtime. The
+      // published LookupFunction type requires an address even when err is set.
+      lookup: createPinnedLookup(hostname, addresses) as unknown as NonNullable<
+        import("node:net").TcpNetConnectOpts["lookup"]
+      >,
     },
   });
   try {

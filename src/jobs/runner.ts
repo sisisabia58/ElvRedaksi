@@ -86,7 +86,7 @@ function instantInTimeZone(
 
 function nextWorkStart(now: Date, workStart: string, timeZone = TIME_ZONE): Date {
   const [sh, sm] = workStart.split(":").map(Number);
-  let { year, month, day } = calendarParts(now, timeZone);
+  const { year, month, day } = calendarParts(now, timeZone);
   let start = instantInTimeZone(year, month, day, sh, sm, timeZone);
   if (start.getTime() <= now.getTime()) {
     const noon = instantInTimeZone(year, month, day, 12, 0, timeZone);

@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import type { Sql } from "../db/client";
+import { createPostgresSql, type Sql } from "../db/client";
 import { DDL } from "../db/sql";
 
 declare global {
@@ -37,10 +37,53 @@ async function initEmbeddedSql(): Promise<Sql> {
   return fromPglite(pg);
 }
 
-/** Server-side SQL for the studio app (embedded PGlite until production wiring lands). */
+function createLockedPostgresSql(
+  query: (text: string, params: unknown[]) => Promise<unknown[]>,
+): Sql {
+  let locked: Promise<void> = Promise.resolve();
+
+  function withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = locked;
+    let release!: () => void;
+    locked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return previous.then(fn).finally(release);
+  }
+
+  const inner = createPostgresSql(query);
+  return {
+    rows(text, params) {
+      return withLock(() => inner.rows(text, params));
+    },
+    tx(fn) {
+      return withLock(() => inner.tx(fn));
+    },
+  };
+}
+
+async function initPostgresSql(databaseUrl: string): Promise<Sql> {
+  const { Client } = await import("pg");
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  const sql = createLockedPostgresSql(async (text, params) => {
+    const result = await client.query(text, params);
+    return result.rows;
+  });
+  const { boot } = await import("../db/boot");
+  await boot(sql);
+  return sql;
+}
+
+/** Server SQL: Postgres when DATABASE_URL is set, otherwise one embedded PGlite. */
 export async function getAppSql(): Promise<Sql> {
   if (!globalThis.__redaksiAppSql) {
-    globalThis.__redaksiAppSql = initEmbeddedSql();
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    const pending = databaseUrl ? initPostgresSql(databaseUrl) : initEmbeddedSql();
+    globalThis.__redaksiAppSql = pending.catch((error: unknown) => {
+      globalThis.__redaksiAppSql = undefined;
+      throw error;
+    });
   }
   return globalThis.__redaksiAppSql;
 }

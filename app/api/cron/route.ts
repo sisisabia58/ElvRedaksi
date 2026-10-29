@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getAppSql } from "@/src/auth/app-sql";
+import { boot } from "@/src/db/boot";
 import { jobHandlers } from "@/src/jobs/handlers";
 import { runDueJobs } from "@/src/jobs/runner";
 
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
   }
 
   const sql = await getAppSql();
+  await boot(sql);
   const { workStart, workEnd } = await loadWorkHours(sql);
   const ran = await runDueJobs(sql, new Date(), {
     handlers: jobHandlers,

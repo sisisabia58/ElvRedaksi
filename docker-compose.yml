@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: redaksi
+      POSTGRES_PASSWORD: redaksi
+      POSTGRES_DB: redaksi
+    volumes:
+      - pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redaksi -d redaksi"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build: .
+    ports:
+      - "43123:43123"
+    environment:
+      DATABASE_URL: postgres://redaksi:redaksi@db:5432/redaksi
+      CRON_SECRET: ${CRON_SECRET:-redaksi-dev-cron}
+      LLM_PROVIDER: demo
+      META_PROVIDER: fake
+      PUBLIC_BASE_URL: http://127.0.0.1:43123
+      SEED_DEMO: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cron:
+    image: curlimages/curl
+    environment:
+      CRON_SECRET: ${CRON_SECRET:-redaksi-dev-cron}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          curl -fsS -X POST http://web:43123/api/cron -H "Authorization: Bearer $$CRON_SECRET" || true
+          sleep 60
+        done
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  pg:
