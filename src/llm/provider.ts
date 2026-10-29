@@ -1,3 +1,11 @@
+import {
+  acquireGeminiSlot,
+  currentGeminiSql,
+  geminiQuotaMessage,
+  parseGeminiErrorBody,
+  recordGeminiPause,
+} from "./gemini-gate";
+
 export type LlmRequest = { purpose: "score" | "copy"; system: string; user: string };
 
 export type LlmResult = { text: string; costUsd: number; model: string };
@@ -173,11 +181,34 @@ const COPY_RESPONSE_SCHEMA = {
 
 export class LlmRateLimitError extends Error {
   readonly retryAfterMs: number;
+  readonly countsAsAttempt: boolean;
+  readonly perDay: boolean;
+  readonly quotaId: string | null;
+  readonly quotaMetric: string | null;
+  readonly quotaLimit: string | null;
+  readonly freeTier: boolean;
 
-  constructor(retryAfterMs: number, message = "Gemini 429") {
+  constructor(
+    retryAfterMs: number,
+    message = "Gemini 429",
+    options: {
+      countsAsAttempt?: boolean;
+      perDay?: boolean;
+      quotaId?: string | null;
+      quotaMetric?: string | null;
+      quotaLimit?: string | null;
+      freeTier?: boolean;
+    } = {},
+  ) {
     super(message);
     this.name = "LlmRateLimitError";
     this.retryAfterMs = retryAfterMs;
+    this.countsAsAttempt = options.countsAsAttempt ?? false;
+    this.perDay = options.perDay ?? false;
+    this.quotaId = options.quotaId ?? null;
+    this.quotaMetric = options.quotaMetric ?? null;
+    this.quotaLimit = options.quotaLimit ?? null;
+    this.freeTier = options.freeTier ?? false;
   }
 }
 
@@ -195,12 +226,18 @@ type GeminiFetch = (
 
 const GEMINI_TIMEOUT_MS = 20_000;
 
-function retryAfterMs(res: GeminiResponse): number {
-  const header = res.headers?.get("retry-after");
+function headerRetryAfterMs(res: GeminiResponse): number | null {
+  const header = res.headers?.get("retry-after") ?? res.headers?.get("Retry-After");
   if (header && /^\d+$/.test(header)) {
     return Number(header) * 1000;
   }
-  return GEMINI_TIMEOUT_MS;
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export class GeminiLlm implements LlmProvider {
@@ -212,6 +249,22 @@ export class GeminiLlm implements LlmProvider {
       throw new Error("GEMINI_API_KEY missing");
     }
     const model = process.env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+    const gate = currentGeminiSql();
+    if (gate) {
+      const slot = await acquireGeminiSlot(gate, new Date());
+      if (!slot.ok) {
+        throw new LlmRateLimitError(slot.retryAfterMs, slot.message, {
+          countsAsAttempt: false,
+          perDay: slot.perDay,
+          quotaId: slot.quotaId,
+          quotaMetric: slot.quotaMetric,
+          quotaLimit: slot.quotaLimit,
+        });
+      }
+      if (slot.waitMs > 0) {
+        await sleep(slot.waitMs);
+      }
+    }
     let res: GeminiResponse;
     try {
       res = await this.fetchImpl(
@@ -235,12 +288,35 @@ export class GeminiLlm implements LlmProvider {
       );
     } catch (error) {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new LlmRateLimitError(GEMINI_TIMEOUT_MS, "Gemini timeout");
+        throw new LlmRateLimitError(GEMINI_TIMEOUT_MS, "Gemini timeout", { countsAsAttempt: true });
       }
       throw error;
     }
     if (res.status === 429 || res.status === 503 || res.status === 504) {
-      throw new LlmRateLimitError(retryAfterMs(res), `Gemini ${res.status}`);
+      let parsed = parseGeminiErrorBody(null);
+      if (res.status === 429) {
+        try {
+          parsed = parseGeminiErrorBody(await res.json());
+        } catch {
+          parsed = parseGeminiErrorBody(null);
+        }
+      }
+      const retryAfterMs = parsed.retryAfterMs ?? headerRetryAfterMs(res) ?? (res.status === 429 ? 60_000 : GEMINI_TIMEOUT_MS);
+      if (res.status === 429 && gate) {
+        try {
+          await recordGeminiPause(gate, new Date(), retryAfterMs, parsed);
+        } catch {
+          // The runner still defers this job if the gate row cannot be written.
+        }
+      }
+      throw new LlmRateLimitError(retryAfterMs, geminiQuotaMessage(res.status, parsed), {
+        countsAsAttempt: res.status !== 429,
+        perDay: res.status === 429 && parsed.perDay,
+        quotaId: parsed.quotaId,
+        quotaMetric: parsed.metric,
+        quotaLimit: parsed.limit,
+        freeTier: parsed.freeTier,
+      });
     }
     if (!res.ok) {
       throw new Error(`Gemini ${res.status}`);

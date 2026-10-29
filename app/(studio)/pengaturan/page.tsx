@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
+import { readGeminiPause } from "@/src/llm/gemini-gate";
 import { llmBanner } from "@/src/llm/provider";
 import { demoRewriteSnapshot } from "@/src/studio/regenerate-demo";
 import { getSettings } from "@/src/studio/settings";
@@ -19,12 +20,14 @@ export default async function PengaturanPage() {
   const settings = await getSettings(sql);
   const showMetaBanner = (process.env.META_PROVIDER ?? "fake") !== "meta";
   const rewrite = await demoRewriteSnapshot(sql);
+  const geminiPause = await readGeminiPause(sql);
 
   return (
     <PengaturanForm
       settings={settings}
       showMetaBanner={showMetaBanner}
       llmBanner={llmBanner().text}
+      geminiPause={geminiPause?.perDay ? geminiPause.message : null}
       demoReviewCount={rewrite.demoScores}
       regenerateProgress={{ done: rewrite.done, total: rewrite.total }}
     />

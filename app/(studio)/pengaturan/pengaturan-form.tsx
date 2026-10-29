@@ -41,12 +41,14 @@ export function PengaturanForm({
   settings,
   showMetaBanner,
   llmBanner,
+  geminiPause,
   demoReviewCount,
   regenerateProgress,
 }: {
   settings: Settings;
   showMetaBanner: boolean;
   llmBanner: string;
+  geminiPause?: string | null;
   demoReviewCount: number;
   regenerateProgress: { done: number; total: number };
 }) {
@@ -135,6 +137,11 @@ export function PengaturanForm({
       <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
         {llmBanner}
       </p>
+      {geminiPause ? (
+        <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
+          {geminiPause}
+        </p>
+      ) : null}
       <RegenerateDemoButton count={demoReviewCount} progress={regenerateProgress} />
       <section className="space-y-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">

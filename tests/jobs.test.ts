@@ -478,7 +478,7 @@ describe("jobs", () => {
     expect(row[0]?.locked_at).toBeNull();
   });
 
-  it("reschedules a Gemini 429 and finishes only after repeated limits", async () => {
+  it("defers a Gemini 429 without counting it as a failed attempt", async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-29T13:00:00Z");
     await enqueue(sql, {
@@ -500,28 +500,111 @@ describe("jobs", () => {
     };
 
     await runDueJobs(sql, now, deps);
+    await sql.rows("update jobs set run_at = $1, locked_at = null where finished_at is null", [now]);
+    await runDueJobs(sql, now, deps);
     const waiting = await sql.rows<{
       attempts: number;
       finished_at: Date | string | null;
       locked_at: Date | string | null;
       error: string;
-      run_at: Date | string;
-    }>("select attempts, finished_at, locked_at, error, run_at from jobs");
-    expect(waiting[0]?.attempts).toBe(1);
+    }>("select attempts, finished_at, locked_at, error from jobs");
+    expect(waiting[0]?.attempts).toBe(0);
     expect(waiting[0]?.finished_at).toBeNull();
     expect(waiting[0]?.locked_at).toBeNull();
     expect(waiting[0]?.error).toMatch(/Gemini 429/);
-    const runAt = waiting[0]?.run_at instanceof Date ? waiting[0].run_at : new Date(String(waiting[0]?.run_at));
-    expect(runAt.getTime()).toBe(now.getTime() + 7_000);
+  });
+
+  it("finishes a Gemini 503 only after repeated failures", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { regenerateDemo: true },
+      runAt: now,
+      manual: true,
+    });
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      handlers: {
+        ...noopHandlers,
+        "copywriter.write": async () => {
+          throw new LlmRateLimitError(7_000, "Gemini 503", { countsAsAttempt: true });
+        },
+      },
+    };
+
+    await runDueJobs(sql, now, deps);
+    const waiting = await sql.rows<{ attempts: number; finished_at: Date | string | null }>(
+      "select attempts, finished_at from jobs",
+    );
+    expect(waiting[0]?.attempts).toBe(1);
+    expect(waiting[0]?.finished_at).toBeNull();
 
     await sql.rows("update jobs set attempts = 7, run_at = $1, locked_at = null", [now]);
     await runDueJobs(sql, now, deps);
-    const done = await sql.rows<{ attempts: number; finished_at: Date | string | null; locked_at: Date | string | null }>(
-      "select attempts, finished_at, locked_at from jobs",
+    const done = await sql.rows<{ attempts: number; finished_at: Date | string | null }>(
+      "select attempts, finished_at from jobs",
     );
     expect(done[0]?.attempts).toBe(8);
     expect(done[0]?.finished_at).not.toBeNull();
-    expect(done[0]?.locked_at).toBeNull();
+  });
+
+  it("pauses every Gemini job until a per-day quota resets", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { regenerateDemo: true, topicId: "one" },
+      runAt: now,
+      manual: true,
+    });
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { regenerateDemo: true, topicId: "two" },
+      runAt: now,
+      manual: true,
+    });
+    let calls = 0;
+    await runDueJobs(sql, now, {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 5_000,
+      concurrency: 1,
+      handlers: {
+        ...noopHandlers,
+        "copywriter.write": async () => {
+          calls += 1;
+          throw new LlmRateLimitError(
+            3_600_000,
+            "Gemini 429: generativelanguage.googleapis.com/generate_content_free_tier_requests limit 500 (GenerateRequestsPerDayPerProjectPerModel-FreeTier)",
+            {
+              perDay: true,
+              freeTier: true,
+              quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+              quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+              quotaLimit: "500",
+            },
+          );
+        },
+      },
+    });
+    expect(calls).toBe(1);
+    const jobs = await sql.rows<{ attempts: number; finished_at: Date | string | null; error: string }>(
+      "select attempts, finished_at, error from jobs order by error",
+    );
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every((job) => job.attempts === 0 && job.finished_at == null)).toBe(true);
+    expect(jobs.some((job) => /Kuota Gemini habis/.test(job.error))).toBe(true);
+    const gate = await sql.rows<{ pause_kind: string; quota_limit: string; quota_id: string }>(
+      "select pause_kind, quota_limit, quota_id from gemini_gate where id = 1",
+    );
+    expect(gate[0]).toMatchObject({
+      pause_kind: "day",
+      quota_limit: "500",
+      quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+    });
   });
 
   it("queues a fresh slide render for a dirty review draft and runs it before older rewrites", async () => {

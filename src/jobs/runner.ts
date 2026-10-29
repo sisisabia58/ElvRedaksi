@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Sql } from "../db/client";
 import { TIME_ZONE } from "../domain/constants";
 import { isWithinWorkHours } from "../domain/time";
+import { readGeminiPause, recordGeminiPause, withGeminiSql } from "../llm/gemini-gate";
 import { LlmRateLimitError } from "../llm/provider";
 
 export type JobName =
@@ -53,6 +54,7 @@ const TICK_BUDGET_MS = 45_000;
 const CONCURRENCY = 4;
 const DESIGNER_SLOTS = 2;
 const RATE_LIMIT_ATTEMPTS = 8;
+const GEMINI_JOBS: Set<JobName> = new Set(["analyst.score", "copywriter.write"]);
 
 function calendarParts(date: Date, timeZone: string) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
@@ -328,6 +330,21 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
       return false;
     }
 
+    if (GEMINI_JOBS.has(job.name)) {
+      const pause = await readGeminiPause(sql, now);
+      if (pause) {
+        try {
+          await sql.rows(
+            `update jobs set error = $1, locked_at = null, run_at = $2 where id = $3 and ${sameLock("$4")}`,
+            [pause.message, pause.until, job.id, job.lockToken],
+          );
+        } catch {
+          // defer bookkeeping failure; lock cleared in finally
+        }
+        return false;
+      }
+    }
+
     const ctx: JobCtx = {
       sql,
       payload: job.payload,
@@ -348,6 +365,27 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
         return false;
       }
     } catch (error) {
+      if (error instanceof LlmRateLimitError && !error.countsAsAttempt) {
+        const delay = Math.max(1_000, error.retryAfterMs);
+        try {
+          if (error.perDay || delay >= 60_000) {
+            await recordGeminiPause(sql, now, delay, {
+              perDay: error.perDay,
+              kind: error.perDay ? "day" : "unknown",
+              metric: error.quotaMetric,
+              quotaId: error.quotaId,
+              limit: error.quotaLimit,
+            });
+          }
+          await sql.rows(
+            `update jobs set error = $1, locked_at = null, run_at = $2 where id = $3 and ${sameLock("$4")}`,
+            [error.message, new Date(now.getTime() + delay), job.id, job.lockToken],
+          );
+        } catch {
+          // retry bookkeeping failure; lock cleared in finally
+        }
+        return false;
+      }
       if (error instanceof LlmRateLimitError) {
         const attempts = job.attempts + 1;
         const message = error.message;
@@ -397,6 +435,10 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
 }
 
 export async function runDueJobs(sql: Sql, now: Date, deps: JobDeps): Promise<number> {
+  return withGeminiSql(sql, () => runDueJobsInner(sql, now, deps));
+}
+
+async function runDueJobsInner(sql: Sql, now: Date, deps: JobDeps): Promise<number> {
   const budgetMs = deps.tickBudgetMs ?? TICK_BUDGET_MS;
   const concurrency = deps.concurrency ?? CONCURRENCY;
   const deadline = Date.now() + budgetMs;

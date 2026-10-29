@@ -1,4 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createTestSql } from "../src/db/client";
+import {
+  acquireGeminiSlot,
+  formatGeminiPause,
+  geminiMaxRpm,
+  parseGeminiErrorBody,
+  parseRetryDelay,
+  readGeminiPause,
+  recordGeminiPause,
+  withGeminiSql,
+} from "../src/llm/gemini-gate";
 import { GEMINI_DEFAULT_MODEL, GeminiLlm, createLlm, llmBanner } from "../src/llm/provider";
 
 const ENV_KEYS = [
@@ -7,6 +18,7 @@ const ENV_KEYS = [
   "GEMINI_MODEL",
   "GEMINI_INPUT_USD_PER_MTOK",
   "GEMINI_OUTPUT_USD_PER_MTOK",
+  "GEMINI_MAX_RPM",
   "OPENAI_MODEL",
 ] as const;
 
@@ -105,7 +117,12 @@ describe("gemini provider", () => {
     });
     await expect(
       llm.complete({ purpose: "copy", system: "sistem", user: "cuplikan" }),
-    ).rejects.toMatchObject({ name: "LlmRateLimitError", retryAfterMs: 7_000 });
+    ).rejects.toMatchObject({
+      name: "LlmRateLimitError",
+      retryAfterMs: 7_000,
+      countsAsAttempt: false,
+      perDay: false,
+    });
     expect(seen[0]).toContain("/models/gemini-2.5-flash:generateContent");
     expect(seen[0]).not.toContain("test-key");
   });
@@ -122,6 +139,7 @@ describe("gemini provider", () => {
       name: "LlmRateLimitError",
       message: "Gemini 503",
       retryAfterMs: 20_000,
+      countsAsAttempt: true,
     });
   });
 
@@ -134,7 +152,7 @@ describe("gemini provider", () => {
     });
     await expect(
       llm.complete({ purpose: "score", system: "sistem", user: "cuplikan" }),
-    ).rejects.toMatchObject({ message: "Gemini timeout", retryAfterMs: 20_000 });
+    ).rejects.toMatchObject({ message: "Gemini timeout", retryAfterMs: 20_000, countsAsAttempt: true });
   });
 
   it("refuses to call Gemini without a key and records zero cost when usage is missing", async () => {
@@ -152,5 +170,127 @@ describe("gemini provider", () => {
     }));
     const result = await llm.complete({ purpose: "copy", system: "", user: "" });
     expect(result.costUsd).toBe(0);
+  });
+
+  it("reads the free-tier daily quota and retryDelay from a 429 body", async () => {
+    setEnv("GEMINI_API_KEY", "test-key");
+    const llm = new GeminiLlm(async () => ({
+      ok: false,
+      status: 429,
+      headers: { get: () => null },
+      json: async () => ({
+        error: {
+          code: 429,
+          message:
+            "You exceeded your current quota. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 500, model: gemini-3.5-flash-lite. Generate content requests per day limit exceeded on Free Tier. Please retry in 15h4m23.077034076s.",
+          status: "RESOURCE_EXHAUSTED",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+              violations: [
+                {
+                  quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                  quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                  quotaDimensions: { location: "global", model: "gemini-3.5-flash-lite" },
+                  quotaValue: "500",
+                },
+              ],
+            },
+            { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "54263s" },
+          ],
+        },
+      }),
+    }));
+    await expect(llm.complete({ purpose: "score", system: "", user: "" })).rejects.toMatchObject({
+      countsAsAttempt: false,
+      perDay: true,
+      freeTier: true,
+      retryAfterMs: 54_263_000,
+      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+      quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+      quotaLimit: "500",
+      message:
+        "Gemini 429: generativelanguage.googleapis.com/generate_content_free_tier_requests limit 500 (GenerateRequestsPerDayPerProjectPerModel-FreeTier)",
+    });
+  });
+});
+
+describe("gemini gate", () => {
+  it("parses protobuf and clock retry delays", () => {
+    expect(parseRetryDelay("54263s")).toBe(54_263_000);
+    expect(parseRetryDelay("15h4m23.077034076s")).toBe(54_263_078);
+    const parsed = parseGeminiErrorBody({
+      error: {
+        message: "requests per minute",
+        details: [
+          {
+            violations: [
+              {
+                quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                quotaId: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+                quotaValue: "15",
+              },
+            ],
+          },
+          { retryDelay: "22s" },
+        ],
+      },
+    });
+    expect(parsed).toMatchObject({ kind: "minute", perDay: false, freeTier: true, limit: "15" });
+    expect(geminiMaxRpm()).toBe(10);
+    setEnv("GEMINI_MAX_RPM", "15");
+    expect(geminiMaxRpm()).toBe(15);
+  });
+
+  it("names the Jakarta clock when the daily quota is paused", () => {
+    const until = new Date("2026-10-30T07:00:00Z");
+    const now = new Date("2026-10-29T15:54:00Z");
+    expect(formatGeminiPause(until, now)).toMatch(/^Kuota Gemini habis, lanjut otomatis pukul 14:00 WIB, 30 /);
+    expect(formatGeminiPause(until, new Date("2026-10-30T06:00:00Z"))).toBe(
+      "Kuota Gemini habis, lanjut otomatis pukul 14:00 WIB",
+    );
+  });
+
+  it("spaces requests and holds every caller until a per-day pause ends", async () => {
+    setEnv("GEMINI_MAX_RPM", "600");
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T16:00:00Z");
+    const first = await acquireGeminiSlot(sql, now);
+    const second = await acquireGeminiSlot(sql, now);
+    expect(first).toEqual({ ok: true, waitMs: 0 });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.waitMs).toBe(100);
+    }
+
+    await recordGeminiPause(sql, now, 54_263_000, {
+      perDay: true,
+      kind: "day",
+      metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+      limit: "500",
+    });
+    const pause = await readGeminiPause(sql, now);
+    expect(pause?.perDay).toBe(true);
+    expect(pause?.quotaLimit).toBe("500");
+    expect(pause?.message).toMatch(/Kuota Gemini habis, lanjut otomatis pukul 14:04 WIB, 30 /);
+
+    const blocked = await acquireGeminiSlot(sql, now);
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.perDay).toBe(true);
+      expect(blocked.retryAfterMs).toBe(54_263_000);
+    }
+
+    setEnv("GEMINI_API_KEY", "test-key");
+    let calls = 0;
+    const llm = new GeminiLlm(async () => {
+      calls += 1;
+      return { ok: true, status: 200, json: async () => ({ candidates: [] }) };
+    });
+    await expect(
+      withGeminiSql(sql, () => llm.complete({ purpose: "score", system: "", user: "" })),
+    ).rejects.toMatchObject({ perDay: true, countsAsAttempt: false });
+    expect(calls).toBe(0);
   });
 });

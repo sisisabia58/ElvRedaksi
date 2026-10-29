@@ -1,5 +1,6 @@
 import type { Sql } from "../db/client";
 import { enqueue } from "../jobs/runner";
+import { readGeminiPause } from "../llm/gemini-gate";
 
 const DEMO_SCORE_REASON = "%(demo)";
 
@@ -87,6 +88,50 @@ export async function enqueueDemoRegeneration(sql: Sql, now = new Date()): Promi
       name: "copywriter.write",
       payload: { topicId: row.topic_id, regenerateDemo: true },
       runAt: now,
+      manual: true,
+    });
+  }
+  return rows.length;
+}
+
+// The 66 rewrites that stopped after eight Gemini 429s. Still manual, and only
+// drafts that are still waiting for a person. A later success, an open job, or
+// any other error stays put.
+export async function requeueStoppedGeminiRewrites(sql: Sql, now = new Date()): Promise<number> {
+  const pause = await readGeminiPause(sql, now);
+  const runAt = pause?.until ?? now;
+  const rows = await sql.rows<{ topic_id: string }>(
+    `select d.topic_id
+     from drafts d
+     where d.status = 'needs_review'
+       and not exists (
+         select 1 from jobs open_job
+         where open_job.name = 'copywriter.write'
+           and open_job.finished_at is null
+           and coalesce(open_job.payload->>'regenerateDemo', '') = 'true'
+           and open_job.payload->>'topicId' = d.topic_id::text
+       )
+       and exists (
+         select 1 from jobs j
+         where j.id = (
+           select j2.id
+           from jobs j2
+           where j2.name = 'copywriter.write'
+             and j2.finished_at is not null
+             and coalesce(j2.payload->>'regenerateDemo', '') = 'true'
+             and j2.payload->>'topicId' = d.topic_id::text
+           order by j2.finished_at desc
+           limit 1
+         )
+         and j.attempts >= 8
+         and j.error like 'Gemini 429%'
+       )`,
+  );
+  for (const row of rows) {
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { topicId: row.topic_id, regenerateDemo: true },
+      runAt,
       manual: true,
     });
   }

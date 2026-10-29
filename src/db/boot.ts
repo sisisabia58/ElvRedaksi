@@ -154,6 +154,17 @@ const SCHEMA_EXTRAS = [
     content_type text not null,
     created_at timestamptz not null default now()
   )`,
+  `create table if not exists gemini_gate (
+    id integer primary key,
+    paused_until timestamptz,
+    pause_kind text,
+    quota_metric text,
+    quota_id text,
+    quota_limit text,
+    last_request_at timestamptz,
+    constraint gemini_gate_one check (id = 1)
+  )`,
+  "insert into gemini_gate (id) values (1) on conflict (id) do nothing",
 ];
 
 export async function ensureSchemaExtras(sql: Sql): Promise<void> {

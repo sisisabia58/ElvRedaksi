@@ -8,11 +8,13 @@ import { contrastRatio } from "../src/domain/contrast";
 import { runDesigner } from "../src/jobs/handlers";
 import { PlaywrightRasterizer } from "../src/render/raster";
 import {
+  bodyMaxHeight,
   bodyPx,
   coverHeadlinePx,
   innerHeadlinePx,
   pageCounter,
   renderBeritaProHtml,
+  wordmarkBox,
 } from "../src/render/berita-pro";
 import { renderSlideHtml, slidesForFormat } from "../src/render/html";
 import { queueBeritaProRerender } from "../src/studio/rerender-template";
@@ -63,7 +65,10 @@ describe("berita pro", () => {
   it("shrinks long headlines and keeps the last slide free of the swipe pill", () => {
     expect(coverHeadlinePx("Kenapa harga beras naik?")).toBeGreaterThan(coverHeadlinePx(longHeadline));
     expect(innerHeadlinePx("Stok aman")).toBeGreaterThan(innerHeadlinePx(longHeadline));
+    expect(bodyPx("Pendek.")).toBe(48);
+    expect(bodyPx("x".repeat(180))).toBe(48);
     expect(bodyPx("Pendek.")).toBeGreaterThan(bodyPx(longHeadline.repeat(2)));
+    expect(bodyPx("x".repeat(235))).toBeLessThan(44);
     expect(pageCounter(1, 3)).toBe("02 / 03");
 
     const cover = renderBeritaProHtml(
@@ -103,8 +108,13 @@ describe("berita pro", () => {
     expect(sourced).not.toContain("sepenuhnya. ANTARA Terkini");
     expect(sourced).toContain("Sumber: ANTARA Terkini");
     expect(sourced).toContain("line-height:1.48");
-    expect(sourced).toContain("object-fit:contain");
-    expect(sourced).toContain("padding:");
+    expect(sourced).toContain(`max-height:${bodyMaxHeight(bodyPx("Pasokan domestik sudah tercukupi sepenuhnya."))}px`);
+    expect(sourced).not.toContain("max-height:742px");
+    const mark = wordmarkBox();
+    expect(mark.top).toBeLessThan(0);
+    expect(mark.height).toBe(68);
+    expect(sourced).toContain(`width:${mark.width}px;height:${mark.height}px`);
+    expect(sourced).toContain(`top:${mark.top}px`);
 
     const middle = renderSlideHtml({
       template: "berita_pro",

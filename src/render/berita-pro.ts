@@ -45,19 +45,31 @@ export function innerHeadlinePx(headline: string): number {
   return 36;
 }
 
+const BODY_LINE_HEIGHT = 1.48;
+const BODY_MAX_LINES = 6;
+
 export function bodyPx(body: string): number {
   const chars = Math.max(body.trim().length, 1);
   const width = 860;
-  const lineHeight = 1.48;
-  const maxHeight = 0.55 * 1350;
-  for (let size = 72; size >= 30; size -= 2) {
+  const linesAt = (size: number) => {
     const charsPerLine = Math.max(12, Math.floor(width / (size * 0.5)));
-    const lines = Math.ceil(chars / charsPerLine);
-    if (lines * size * lineHeight <= maxHeight) {
+    return Math.ceil(chars / charsPerLine);
+  };
+  for (const size of [48, 46, 44]) {
+    if (linesAt(size) <= BODY_MAX_LINES) {
       return size;
     }
   }
-  return 30;
+  for (let size = 42; size >= 32; size -= 2) {
+    if (linesAt(size) <= BODY_MAX_LINES) {
+      return size;
+    }
+  }
+  return 32;
+}
+
+export function bodyMaxHeight(size: number): number {
+  return Math.round(size * BODY_LINE_HEIGHT * BODY_MAX_LINES);
 }
 
 export function pageCounter(index: number, total: number): string {
@@ -73,14 +85,31 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// The source bitmap is 590×477 with the wordmark at y 145–339, x 0–559.
+// Cropping to that box keeps the letters filling the badge instead of sitting
+// in the navy margin. 48px is about twice the previous visible wordmark.
+const WORDMARK = { imageW: 590, imageH: 477, x: 0, y: 145, w: 560, h: 195 };
+const WORDMARK_PX = 48;
+const WORDMARK_PAD = 10;
+
+export function wordmarkBox(wordmarkPx = WORDMARK_PX): { width: number; height: number; top: number } {
+  const scale = wordmarkPx / WORDMARK.h;
+  return {
+    width: Math.round(WORDMARK_PAD * 2 + WORDMARK.w * scale),
+    height: Math.round(WORDMARK_PAD * 2 + wordmarkPx),
+    top: Math.round(WORDMARK_PAD - WORDMARK.y * scale),
+  };
+}
+
 function logoMark(logoDataUrl: string | null | undefined, initial: string, accent: string, height: number): string {
   const safe = safePhotoDataUrl(logoDataUrl ?? null);
   if (safe) {
-    const pad = Math.max(10, Math.round(height * 0.18));
-    const boxW = Math.round(height * 1.85);
-    const innerW = boxW - pad * 2;
-    const innerH = height - pad * 2;
-    return `<div style="width:${boxW}px;height:${height}px;background:${COVER_NAVY};border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto;"><img src="${escapeHtml(safe)}" alt="" style="width:${innerW}px;height:${innerH}px;object-fit:contain;display:block;" /></div>`;
+    const scale = WORDMARK_PX / WORDMARK.h;
+    const box = wordmarkBox();
+    const imgW = Math.round(WORDMARK.imageW * scale);
+    const imgH = Math.round(WORDMARK.imageH * scale);
+    const left = Math.round(WORDMARK_PAD - WORDMARK.x * scale);
+    return `<div style="width:${box.width}px;height:${box.height}px;background:${COVER_NAVY};border-radius:12px;position:relative;overflow:hidden;flex:0 0 auto;"><img src="${escapeHtml(safe)}" alt="" style="position:absolute;left:${left}px;top:${box.top}px;width:${imgW}px;height:${imgH}px;max-width:none;" /></div>`;
   }
   const letter = escapeHtml((initial.trim() || "A").slice(0, 1).toUpperCase());
   const ink = onAccentText(accent, COVER_NAVY);
@@ -134,7 +163,7 @@ function renderCover(input: BeritaProInput, accent: string): string {
     <div style="position:relative;z-index:4;padding:48px 72px 0;max-height:520px;overflow:hidden;box-sizing:border-box;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;min-height:96px;">
         <div style="font-family:Inter,sans-serif;font-weight:700;font-size:22px;letter-spacing:0.16em;text-transform:uppercase;color:#FFFFFF;padding-top:18px;overflow:hidden;max-width:520px;white-space:nowrap;">${escapeHtml(input.slide.kicker)}</div>
-        ${logoMark(input.logoDataUrl, input.initial ?? "A", accent, 92)}
+        ${logoMark(input.logoDataUrl, input.initial ?? "A", accent, WORDMARK_PX)}
       </div>
       <div style="margin-top:28px;font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:${px}px;line-height:0.98;letter-spacing:-0.035em;color:#FFFFFF;max-height:300px;overflow:hidden;">${escapeHtml(input.slide.headline)}</div>
       <div style="margin-top:32px;">${swipePill(accent, true)}</div>
@@ -163,13 +192,13 @@ function renderInner(input: BeritaProInput, accent: string): string {
         <div style="font-family:Inter,sans-serif;font-weight:700;font-size:22px;letter-spacing:0.16em;text-transform:uppercase;color:${COVER_NAVY};padding-top:16px;overflow:hidden;max-width:460px;white-space:nowrap;">${escapeHtml(input.slide.kicker)}</div>
         <div style="display:flex;align-items:center;gap:18px;">
           <div style="font-family:Inter,sans-serif;font-weight:700;font-size:22px;letter-spacing:0.08em;color:${COVER_NAVY};">${pageCounter(input.index, input.total)}</div>
-          ${logoMark(input.logoDataUrl, input.initial ?? "A", accent, 78)}
+          ${logoMark(input.logoDataUrl, input.initial ?? "A", accent, WORDMARK_PX)}
         </div>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;overflow:hidden;">
         <div style="font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:${headlineSize}px;line-height:1.05;letter-spacing:-0.03em;color:${COVER_NAVY};max-height:220px;overflow:hidden;">${escapeHtml(input.slide.headline)}</div>
         <div style="width:84px;height:8px;background:${accent};margin:28px 0 28px;flex:0 0 auto;"></div>
-        <div style="font-family:Inter,sans-serif;font-weight:400;font-size:${bodySize}px;line-height:1.48;color:${COVER_NAVY};max-width:860px;max-height:742px;overflow:hidden;">${escapeHtml(input.slide.body)}</div>
+        <div style="font-family:Inter,sans-serif;font-weight:400;font-size:${bodySize}px;line-height:${BODY_LINE_HEIGHT};color:${COVER_NAVY};max-width:860px;max-height:${bodyMaxHeight(bodySize)}px;overflow:hidden;">${escapeHtml(input.slide.body)}</div>
       </div>
     </div>
     <div style="position:absolute;left:72px;bottom:64px;right:300px;z-index:4;">

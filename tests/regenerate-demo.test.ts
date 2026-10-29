@@ -4,7 +4,8 @@ import { seedDefaults } from "../src/db/seed";
 import { ScriptedLlm } from "../src/llm/provider";
 import { runCopywriter } from "../src/jobs/handlers";
 import { demoRewriteSummary } from "../src/studio/demo-rewrite-summary";
-import { demoRewriteSnapshot, enqueueDemoRegeneration } from "../src/studio/regenerate-demo";
+import { recordGeminiPause } from "../src/llm/gemini-gate";
+import { demoRewriteSnapshot, enqueueDemoRegeneration, requeueStoppedGeminiRewrites } from "../src/studio/regenerate-demo";
 
 const SOURCE = "11111111-1111-1111-1111-111111111111";
 const DEMO_TOPIC = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
@@ -234,5 +235,74 @@ describe("demo draft regeneration", () => {
       ],
     );
     expect(await demoRewriteSnapshot(sql)).toEqual({ demoScores: 1, done: 1, total: 2 });
+  });
+
+  it("requeues only needs_review rewrites that stopped on a Gemini 429", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      SOURCE,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await seedPair(sql, {
+      topicId: DEMO_TOPIC,
+      draftId: DEMO_DRAFT,
+      status: "needs_review",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "stop1",
+    });
+    await seedPair(sql, {
+      topicId: OTHER_TOPIC,
+      draftId: OTHER_DRAFT,
+      status: "approved",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "stop2",
+    });
+    const stopped = new Date("2026-10-29T13:00:00Z");
+    const reset = new Date(stopped.getTime() + 3_600_000);
+    await recordGeminiPause(sql, stopped, 3_600_000, {
+      perDay: true,
+      kind: "day",
+      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+      limit: "500",
+    });
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, finished_at, attempts, error, manual)
+       values
+         ($1, 'copywriter.write', $2::jsonb, $3, $3, 8, 'Gemini 429', true),
+         ($4, 'copywriter.write', $5::jsonb, $3, $3, 8, 'Gemini 429', true),
+         ($6, 'copywriter.write', $7::jsonb, $3, $3, 8, 'Gemini 503', true)`,
+      [
+        "11111111-1111-4111-8111-111111111111",
+        JSON.stringify({ topicId: DEMO_TOPIC, regenerateDemo: true }),
+        stopped,
+        "22222222-2222-4222-8222-222222222222",
+        JSON.stringify({ topicId: OTHER_TOPIC, regenerateDemo: true }),
+        "33333333-3333-4333-8333-333333333333",
+        JSON.stringify({ topicId: DEMO_TOPIC, regenerateDemo: true }),
+      ],
+    );
+    await sql.rows(
+      `update jobs set finished_at = $1, error = 'Gemini 503' where id = $2`,
+      [new Date(stopped.getTime() + 1_000), "33333333-3333-4333-8333-333333333333"],
+    );
+    expect(await requeueStoppedGeminiRewrites(sql, stopped)).toBe(0);
+
+    await sql.rows(`update jobs set finished_at = $1 where id = $2`, [
+      new Date(stopped.getTime() - 1_000),
+      "33333333-3333-4333-8333-333333333333",
+    ]);
+    expect(await requeueStoppedGeminiRewrites(sql, stopped)).toBe(1);
+    const queued = await sql.rows<{ manual: boolean; run_at: Date | string; payload: { topicId?: string } }>(
+      "select manual, run_at, payload from jobs where finished_at is null",
+    );
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.manual).toBe(true);
+    expect(queued[0]?.payload.topicId).toBe(DEMO_TOPIC);
+    const runAt = queued[0]?.run_at instanceof Date ? queued[0].run_at : new Date(String(queued[0]?.run_at));
+    expect(runAt.getTime()).toBe(reset.getTime());
+    expect(await requeueStoppedGeminiRewrites(sql, stopped)).toBe(0);
   });
 });
