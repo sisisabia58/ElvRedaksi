@@ -620,6 +620,13 @@ class SupersededRenderError extends Error {
   }
 }
 
+// node-pg (and PGlite) return timestamptz as a JS Date, which drops microseconds.
+// Comparing the raw column to that Date never matches a Postgres now() value,
+// so the first render rolls back and the draft stays out of review.
+function sameUpdatedAt(param: string): string {
+  return `date_trunc('milliseconds', updated_at) = date_trunc('milliseconds', ${param}::timestamptz)`;
+}
+
 export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const draftId = ctx.payload.draftId;
   if (typeof draftId !== "string" || !draftId) {
@@ -686,11 +693,10 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await ctx.sql.rows(`update drafts set error = $1 where id = $2 and updated_at = $3`, [
-        message,
-        draftId,
-        startedAt,
-      ]);
+      await ctx.sql.rows(
+        `update drafts set error = $1 where id = $2 and ${sameUpdatedAt("$3")}`,
+        [message, draftId, startedAt],
+      );
       throw error;
     }
   } finally {
@@ -714,7 +720,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
         updated = await tx.rows<{ id: string }>(
           `update drafts
            set status = 'needs_review', text_dirty = false, error = null, updated_at = $1
-           where id = $2 and status = 'drafted' and updated_at = $3
+           where id = $2 and status = 'drafted' and ${sameUpdatedAt("$3")}
            returning id`,
           [ctx.now, draftId, startedAt],
         );
@@ -722,7 +728,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
         updated = await tx.rows<{ id: string }>(
           `update drafts
            set text_dirty = false, error = null, updated_at = $1
-           where id = $2 and status = $3 and updated_at = $4
+           where id = $2 and status = $3 and ${sameUpdatedAt("$4")}
            returning id`,
           [ctx.now, draftId, current, startedAt],
         );

@@ -183,6 +183,26 @@ describe("designer", () => {
     expect(log[0].message).toBe('Gambar selesai untuk "Iklan baru bisa nyamar"');
   });
 
+  it("moves a drafted row to review when updated_at has microseconds", async () => {
+    const sql = await seedDesignerDraft("drafted");
+    await sql.rows(`update drafts set updated_at = '2026-10-29 19:00:00.123456+00' where id = $1`, [
+      DRAFT_ID,
+    ]);
+    await runDesigner({
+      sql,
+      payload: { draftId: DRAFT_ID },
+      manual: true,
+      now: new Date("2026-10-29T19:00:05.000Z"),
+      rasterizer: new FakeRasterizer(),
+    });
+    const status = await sql.rows<{ status: string }>("select status from drafts");
+    expect(status[0]?.status).toBe("needs_review");
+    const assets = await sql.rows("select slide_index from assets");
+    expect(assets.length).toBeGreaterThan(0);
+    const log = await sql.rows<{ message: string }>("select message from activity where agent = 'designer'");
+    expect(log[0]?.message).toBe('Gambar selesai untuk "Iklan baru bisa nyamar"');
+  });
+
   it("rasterizes an uploaded cover photo from slide json", async () => {
     const coverPhoto = "data:image/png;base64,iVBORw0KGgo";
     const slidesWithPhoto = [{ ...slides[0], photoDataUrl: coverPhoto }, ...slides.slice(1)];
