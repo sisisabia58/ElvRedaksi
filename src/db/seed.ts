@@ -1,3 +1,5 @@
+import { BRAND_NAME, DEFAULT_ACCENT } from "../domain/brand";
+import { readDefaultLogo } from "../render/brand-logo";
 import type { Sql } from "./client";
 
 const BRAIN_DOCS: { slug: string; title: string; body: string }[] = [
@@ -34,7 +36,7 @@ const BRAIN_DOCS: { slug: string; title: string; body: string }[] = [
   {
     slug: "06-aturan-carousel",
     title: "Aturan carousel",
-    body: "Carousel penuh: 1 sampul + 2 sampai 5 slide poin. Teaser: sampul + 1 slide CTA ke link bio. Setiap slide memuat nama sumber. Jangan minta foto dari situs berita.",
+    body: "Carousel penuh: 1 sampul + 2 sampai 5 slide poin. Teaser: sampul + 1 slide CTA ke link bio. Template Berita Pro menayangkan paling banyak 3 gambar: sampul plus 1 atau 2 slide isi. Ajakan baca link bio ada di slide isi terakhir, bukan slide terpisah. Setiap slide memuat nama sumber. Foto diambil dari gambar artikel, bukan dari permintaan ke model.",
   },
 ];
 
@@ -44,11 +46,14 @@ export async function seedDefaults(sql: Sql): Promise<void> {
     return;
   }
 
+  const logo = readDefaultLogo();
   await sql.rows(
-    `insert into brand (name, handle, initial, accent, kicker, pass_threshold, default_format, default_template)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)
+    `insert into brand (
+       name, handle, initial, accent, kicker, pass_threshold, default_format, default_template,
+       slide_count, logo, logo_type
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      on conflict (id) do nothing`,
-    ["Redaksi", "redaksi", "R", "#d7ff3a", "Catatan redaksi", 70, "teaser_bio", "serif"],
+    [BRAND_NAME, "", "A", DEFAULT_ACCENT, "Catatan redaksi", 70, "carousel_full", "berita_pro", 3, logo.bytes, logo.contentType],
   );
 
   for (const doc of BRAIN_DOCS) {

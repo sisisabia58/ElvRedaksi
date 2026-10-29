@@ -6,7 +6,10 @@ import type { Settings, SettingsInput } from "@/src/studio/settings";
 import {
   changePasswordAction,
   disconnectInstagramAction,
+  queueBeritaProRerenderAction,
+  restoreLogoAction,
   saveInstagramConnectAction,
+  saveLogoAction,
   saveSettingsAction,
 } from "./actions";
 import { RegenerateDemoButton } from "@/components/studio/regenerate-demo-button";
@@ -29,6 +32,7 @@ function brandFromSettings(settings: Settings): SettingsInput {
     passThreshold: settings.passThreshold,
     defaultFormat: settings.defaultFormat,
     defaultTemplate: settings.defaultTemplate,
+    slideCount: settings.slideCount,
     publicBaseUrl: settings.publicBaseUrl,
   };
 }
@@ -49,6 +53,9 @@ export function PengaturanForm({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [brandError, setBrandError] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const [logoNote, setLogoNote] = useState<string | null>(null);
+  const [rerenderNote, setRerenderNote] = useState<string | null>(null);
   const [igError, setIgError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSaved, setPasswordSaved] = useState(false);
@@ -129,6 +136,43 @@ export function PengaturanForm({
         {llmBanner}
       </p>
       <RegenerateDemoButton count={demoReviewCount} progress={regenerateProgress} />
+      <section className="space-y-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+          Template Berita Pro
+        </h2>
+        <p className="text-sm text-[var(--muted)]">
+          Menggambar ulang draf yang sedang ditinjau dengan template Berita Pro. Status tetap
+          perlu ditinjau. Tidak menyetujui, menjadwalkan, atau memposting.
+        </p>
+        {rerenderNote ? <p className="text-sm text-[var(--muted)]">{rerenderNote}</p> : null}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={pending}
+          onClick={() => {
+            if (
+              !window.confirm(
+                "Gambar ulang semua draf yang sedang ditinjau dengan template Berita Pro? Ini tidak memposting.",
+              )
+            ) {
+              return;
+            }
+            startTransition(async () => {
+              const result = await queueBeritaProRerenderAction();
+              if (result.ok) {
+                setRerenderNote(
+                  `${result.queued ?? 0} draf masuk antrian gambar dengan template baru.`,
+                );
+                router.refresh();
+              } else {
+                setRerenderNote(result.error);
+              }
+            });
+          }}
+        >
+          Render ulang dengan template baru
+        </Button>
+      </section>
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
@@ -189,6 +233,9 @@ export function PengaturanForm({
             value={brand.handle}
             onChange={(value) => setBrand((b) => ({ ...b, handle: value }))}
           />
+          <p className="text-xs text-[var(--muted)]">
+            Kosongkan jika belum ada akun Instagram. Teks akun disembunyikan.
+          </p>
           <ControlledField
             label="Inisial"
             value={brand.initial}
@@ -200,6 +247,10 @@ export function PengaturanForm({
             value={brand.accent}
             onChange={(value) => setBrand((b) => ({ ...b, accent: value }))}
           />
+          <p className="text-xs text-[var(--muted)]">
+            Tombol geser, garis, nomor slide, dan duotone foto. Bawaan #4E708C, cukup kontras di
+            navy dan latar terang.
+          </p>
           <ControlledField
             label="Teks pembuka"
             value={brand.kicker}
@@ -258,8 +309,26 @@ export function PengaturanForm({
               <option value="stabilo">Stabilo</option>
               <option value="foto_penuh">Foto penuh</option>
               <option value="serif">Serif</option>
+              <option value="berita_pro">Berita Pro</option>
               <option value="catatan">Catatan</option>
             </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="slideCount">Jumlah slide</Label>
+            <select
+              id="slideCount"
+              value={brand.slideCount}
+              onChange={(e) =>
+                setBrand((b) => ({ ...b, slideCount: Number(e.target.value) === 2 ? 2 : 3 }))
+              }
+              className={fieldClass}
+            >
+              <option value={2}>2 — sampul + 1 isi</option>
+              <option value={3}>3 — sampul + 2 isi</option>
+            </select>
+            <p className="text-xs text-[var(--muted)]">
+              Maksimum 3. Slide isi terakhir memuat sumber dan ajakan baca di link bio.
+            </p>
           </div>
           <ControlledField
             label="URL publik"
@@ -274,6 +343,72 @@ export function PengaturanForm({
           <Button type="submit" disabled={pending}>
             Simpan
           </Button>
+        </form>
+        <form
+          className="space-y-3 border-t border-[var(--line)] pt-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const data = new FormData(form);
+            startTransition(async () => {
+              const result = await saveLogoAction(data);
+              if (result.ok) {
+                setLogoError(null);
+                setLogoNote("Logo tersimpan.");
+                form.reset();
+                router.refresh();
+              } else {
+                setLogoNote(null);
+                setLogoError(result.error);
+              }
+            });
+          }}
+        >
+          <Label htmlFor="logo">Logo</Label>
+          <p className="text-xs text-[var(--muted)]">
+            {settings.hasLogo
+              ? "Logo tersimpan. Kosongkan unggahan untuk tetap memakai logo bawaan Analyst Digest."
+              : "Belum ada unggahan. Slide memakai logo bawaan Analyst Digest, atau inisial jika berkas bawaan tidak ada."}
+          </p>
+          <input
+            id="logo"
+            name="logo"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            required
+            className="block w-full text-sm"
+          />
+          {logoError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {logoError}
+            </p>
+          ) : null}
+          {logoNote ? <p className="text-sm text-[var(--muted)]">{logoNote}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={pending}>
+              Unggah logo
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                startTransition(async () => {
+                  const result = await restoreLogoAction();
+                  if (result.ok) {
+                    setLogoError(null);
+                    setLogoNote("Logo bawaan Analyst Digest dipakai.");
+                    router.refresh();
+                  } else {
+                    setLogoNote(null);
+                    setLogoError(result.error);
+                  }
+                });
+              }}
+            >
+              Pakai logo bawaan
+            </Button>
+          </div>
         </form>
       </section>
 

@@ -41,6 +41,18 @@ describe("copywriter", () => {
     expect(copy.hashtags).toEqual(["iklan", "medsos", "sumber"]);
   });
 
+  it("accepts one content slide plus a closing slide", () => {
+    const slim = {
+      ...good,
+      slides: [good.slides[0], good.slides[1], good.slides[3]],
+    };
+    expect(parseCopy(JSON.stringify(slim), "Contoh").slides.map((slide) => slide.role)).toEqual([
+      "cover",
+      "point",
+      "cta",
+    ]);
+  });
+
   it("rejects a carousel that forgets the source", () => {
     expect(() => parseCopy(JSON.stringify({ ...good, caption: "Tanpa nama media." }), "Contoh")).toThrow(
       /naskah tidak valid/,
@@ -64,8 +76,10 @@ describe("copywriter", () => {
       now: new Date("2026-10-28T02:00:00Z"),
       llm: new DemoLlm(),
     });
-    const drafts = await sql.rows<{ status: string; format: string }>("select status, format from drafts");
-    expect(drafts).toEqual([{ status: "drafted", format: "teaser_bio" }]);
+    const drafts = await sql.rows<{ status: string; format: string; template: string }>(
+      "select status, format, template from drafts",
+    );
+    expect(drafts).toEqual([{ status: "drafted", format: "carousel_full", template: "berita_pro" }]);
     const jobs = await sql.rows<{ name: string }>("select name from jobs where name = 'designer.render'");
     expect(jobs).toHaveLength(1);
     const log = await sql.rows<{ message: string }>("select message from activity where agent = 'copywriter'");

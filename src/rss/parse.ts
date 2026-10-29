@@ -5,6 +5,7 @@ export type FeedItem = {
   url: string;
   publishedAt: Date | null;
   summary: string;
+  imageUrl: string | null;
 };
 
 type PreserveNode = Record<string, unknown>;
@@ -130,6 +131,36 @@ function parseDateText(text: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+const IMAGE_TAGS = ["enclosure", "media:content", "media:thumbnail"];
+
+function imageUrlFromItem(itemNodes: PreserveNode[]): string | null {
+  for (const node of itemNodes) {
+    if (typeof node !== "object" || node === null) {
+      continue;
+    }
+    const attrs = node[":@"];
+    if (!attrs || typeof attrs !== "object") {
+      continue;
+    }
+    const record = attrs as Record<string, string>;
+    for (const tag of IMAGE_TAGS) {
+      if (!(tag in node)) {
+        continue;
+      }
+      const raw = (record["@_url"] || record["@_href"] || "").trim();
+      const type = (record["@_type"] || record["@_medium"] || "").trim().toLowerCase();
+      if (!raw || (type && !type.startsWith("image"))) {
+        continue;
+      }
+      const url = validHttpUrl(raw);
+      if (url) {
+        return url;
+      }
+    }
+  }
+  return null;
+}
+
 function normalizeItemNodes(itemNodes: PreserveNode[]): FeedItem | null {
   const title = fieldFromItem(itemNodes, "title");
   if (!title) {
@@ -150,7 +181,7 @@ function normalizeItemNodes(itemNodes: PreserveNode[]): FeedItem | null {
     parseDateText(fieldFromItem(itemNodes, "pubDate")) ??
     parseDateText(fieldFromItem(itemNodes, "published")) ??
     parseDateText(fieldFromItem(itemNodes, "updated"));
-  return { title, url, publishedAt, summary };
+  return { title, url, publishedAt, summary, imageUrl: imageUrlFromItem(itemNodes) };
 }
 
 function collectItemNodeLists(nodes: unknown, tag: string, out: PreserveNode[][]): void {

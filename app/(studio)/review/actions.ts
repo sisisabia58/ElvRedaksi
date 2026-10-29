@@ -267,7 +267,7 @@ export async function setFormatAction(
 
 export async function setTemplateAction(
   id: string,
-  template: "stabilo" | "foto_penuh" | "serif" | "catatan",
+  template: "stabilo" | "foto_penuh" | "serif" | "catatan" | "berita_pro",
 ): Promise<ActionResult> {
   try {
     const { sql, role } = await sessionUser();

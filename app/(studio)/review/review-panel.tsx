@@ -171,7 +171,7 @@ export function ReviewPanel({
                 <div className="p-3 space-y-1">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                     <span>{card.slideLabel}</span>
-                    <span>@{card.handle}</span>
+                    {card.handle ? <span>@{card.handle}</span> : null}
                     {card.score != null ? (
                       <span className="font-mono text-[var(--accent)]">{card.score}</span>
                     ) : null}

@@ -43,7 +43,7 @@ type DraftView = {
   topicId: string;
   status: DraftStatus;
   format: "carousel_full" | "teaser_bio";
-  template: "stabilo" | "foto_penuh" | "serif" | "catatan";
+  template: "stabilo" | "foto_penuh" | "serif" | "catatan" | "berita_pro";
   slides: Slide[];
   caption: string;
   hashtags: string[];
@@ -63,6 +63,7 @@ type DraftView = {
 };
 
 const TEMPLATES: { value: DraftView["template"]; label: string }[] = [
+  { value: "berita_pro", label: "Berita Pro" },
   { value: "stabilo", label: "Stabilo" },
   { value: "foto_penuh", label: "Foto penuh" },
   { value: "serif", label: "Serif" },
@@ -117,13 +118,14 @@ export function EditorPanel({
   const [seenUpdatedAt, setSeenUpdatedAt] = useState(draft.updatedAt);
   const slideTotal = draft.slideCount;
   const clampedIndex = Math.min(slideIndex, Math.max(slideTotal - 1, 0));
+  const slideOptions = { template, slideCount: draft.slideCount };
   if (draft.updatedAt !== seenUpdatedAt) {
     const next = editorTextFields(draft, clampedIndex);
     const adopted = adoptServerDraft(
       serverBaseline,
       { slides, kicker, headline, body, caption, hashtagsText, altHeadlines },
       next,
-      { format, index: clampedIndex },
+      { format, index: clampedIndex, template, slideCount: draft.slideCount },
     );
     setSlides(adopted.slides);
     setKicker(adopted.kicker);
@@ -146,6 +148,7 @@ export function EditorPanel({
       omitRejectedCoverPhoto(slides, blockedPhotoUrl),
       clampedIndex,
       { kicker, headline, body },
+      slideOptions,
     );
     const cover = updatedSlides.find((slide) => slide.role === "cover") ?? updatedSlides[0];
     return {
@@ -166,6 +169,7 @@ export function EditorPanel({
     blockedPhotoUrl,
     format,
     clampedIndex,
+    slideOptions,
   ]);
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>, redirect?: string) {
@@ -248,7 +252,7 @@ export function EditorPanel({
     const hashtagsMatch =
       hashtags.length === draft.hashtags.length &&
       hashtags.every((tag, i) => tag === draft.hashtags[i]);
-    const edited = writePreviewFields(format, slides, clampedIndex, { kicker, headline, body });
+    const edited = writePreviewFields(format, slides, clampedIndex, { kicker, headline, body }, slideOptions);
     const textChanged =
       edited.length !== draft.slides.length ||
       edited.some((slide, index) => {
@@ -273,12 +277,13 @@ export function EditorPanel({
     draft.hashtags,
     draft.slides,
     format,
+    slideOptions,
   ]);
 
   function showPreview(nextIndex: number) {
-    const written = writePreviewFields(format, slides, clampedIndex, { kicker, headline, body });
+    const written = writePreviewFields(format, slides, clampedIndex, { kicker, headline, body }, slideOptions);
     const bounded = Math.min(Math.max(nextIndex, 0), Math.max(slideTotal - 1, 0));
-    const text = readPreviewFields(format, written, bounded);
+    const text = readPreviewFields(format, written, bounded, slideOptions);
     setSlides(written);
     setKicker(text.kicker);
     setHeadline(text.headline);

@@ -14,11 +14,14 @@ import {
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
 import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from "../publish/publisher";
+import { clampSlideCount } from "../domain/brand";
 import { renderSlideHtml, safePhotoDataUrl, slidesForFormat, type SlideTemplate } from "../render/html";
+import { defaultLogoDataUrl } from "../render/brand-logo";
+import { dataUrlFromBytes, cachedImageDataUrl } from "../rss/image-cache";
 import { PlaywrightRasterizer, type Rasterizer } from "../render/raster";
 import { createLlm, type LlmProvider } from "../llm/provider";
 import { fetchPublicText, PRIVATE_FETCH_MESSAGE } from "../rss/fetch-guard";
-import { excerptFromHtml } from "../rss/excerpt";
+import { excerptFromHtml, imageUrlFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
 import { normalizeInsights, type DailyPoint } from "../studio/analytics";
 import { validateCoverPhotoDataUrl, withLockedDraftEdit } from "../studio/drafts";
@@ -60,9 +63,13 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
         }
 
         let excerpt = "";
+        let imageUrl = item.imageUrl;
         try {
           const html = await ctx.fetchPage(item.url);
           excerpt = excerptFromHtml(html);
+          if (!imageUrl) {
+            imageUrl = imageUrlFromHtml(html, item.url);
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message === PRIVATE_FETCH_MESSAGE) {
@@ -73,8 +80,8 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
 
         await ctx.sql.tx(async (tx) => {
           const inserted = await tx.rows<{ id: string }>(
-            `insert into topics (id, source_id, title, url, summary, excerpt, published_at)
-             values ($1, $2, $3, $4, $5, $6, $7)
+            `insert into topics (id, source_id, title, url, summary, excerpt, published_at, image_url)
+             values ($1, $2, $3, $4, $5, $6, $7, $8)
              on conflict (url) do nothing
              returning id`,
             [
@@ -85,6 +92,7 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
               item.summary,
               excerpt,
               item.publishedAt,
+              imageUrl,
             ],
           );
           if (inserted[0]) {
@@ -354,13 +362,20 @@ function isUniqueViolation(error: unknown): boolean {
   return false;
 }
 
-async function loadBrandDefaults(sql: JobCtx["sql"]): Promise<{ format: string; template: string }> {
-  const rows = await sql.rows<{ default_format: string; default_template: string }>(
-    "select default_format, default_template from brand where id = 1",
-  );
+async function loadBrandDefaults(
+  sql: JobCtx["sql"],
+): Promise<{ format: string; template: string; slideCount: number; handle: string }> {
+  const rows = await sql.rows<{
+    default_format: string;
+    default_template: string;
+    slide_count: number;
+    handle: string;
+  }>("select default_format, default_template, slide_count, handle from brand where id = 1");
   return {
-    format: rows[0]?.default_format ?? "teaser_bio",
-    template: rows[0]?.default_template ?? "serif",
+    format: rows[0]?.default_format ?? "carousel_full",
+    template: rows[0]?.default_template ?? "berita_pro",
+    slideCount: clampSlideCount(rows[0]?.slide_count),
+    handle: rows[0]?.handle ?? "",
   };
 }
 
@@ -476,9 +491,10 @@ async function rewriteDemoReviewDraft(
     return;
   }
 
+  const brand = await loadBrandDefaults(ctx.sql);
   const copyResult = await llm.complete({
     purpose: "copy",
-    system: copySystem(brain),
+    system: copySystem(brain, { slideCount: brand.slideCount, handle: brand.handle }),
     user,
   });
   await ctx.sql.rows(
@@ -586,9 +602,10 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
     `Cuplikan: ${topic.excerpt}`,
   ].join("\n");
 
+  const brand = await loadBrandDefaults(ctx.sql);
   const result = await llm.complete({
     purpose: "copy",
-    system: copySystem(brain),
+    system: copySystem(brain, { slideCount: brand.slideCount, handle: brand.handle }),
     user,
   });
 
@@ -667,7 +684,6 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
     return;
   }
 
-  const brand = await loadBrandDefaults(ctx.sql);
   const slidesJson = JSON.stringify(copy.slides);
   let draftId: string | null = null;
 
@@ -779,10 +795,16 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
     source_name: string;
     handle: string;
     accent: string;
+    initial: string;
+    slide_count: number;
+    image_url: string | null;
+    logo: unknown;
+    logo_type: string | null;
     updated_at: Date;
   }>(
     `select d.status, d.format, d.template, d.slides, d.focal_y, d.updated_at,
-            s.name as source_name, b.handle, b.accent
+            s.name as source_name, t.image_url, b.handle, b.accent, b.initial,
+            b.slide_count, b.logo, b.logo_type
      from drafts d
      join topics t on t.id = d.topic_id
      join sources s on s.id = t.source_id
@@ -804,17 +826,24 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const allSlides: Slide[] =
     typeof draft.slides === "string" ? (JSON.parse(draft.slides) as Slide[]) : draft.slides;
   const format = draft.format as "carousel_full" | "teaser_bio";
-  const selected = slidesForFormat(format, allSlides);
   const template = draft.template as SlideTemplate;
+  const selected = slidesForFormat(format, allSlides, {
+    template,
+    slideCount: draft.slide_count,
+  });
   const current = draft.status as DraftStatus;
   const startedAt = draft.updated_at;
+  const logoDataUrl = dataUrlFromBytes(draft.logo, draft.logo_type ?? "") ?? defaultLogoDataUrl();
 
   const rendered: Uint8Array[] = [];
   try {
     try {
       for (let index = 0; index < selected.length; index++) {
         const slide = selected[index];
-        const { photoDataUrl, focalY } = photoInputForSlide(slide, draft.focal_y);
+        let { photoDataUrl, focalY } = photoInputForSlide(slide, draft.focal_y);
+        if (template === "berita_pro" && slide.role === "cover" && !photoDataUrl && draft.image_url) {
+          photoDataUrl = safePhotoDataUrl(await cachedImageDataUrl(ctx.sql, draft.image_url));
+        }
         const html = renderSlideHtml({
           template,
           slide,
@@ -825,6 +854,8 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
           accent: draft.accent,
           focalY,
           photoDataUrl,
+          logoDataUrl,
+          initial: draft.initial,
         });
         rendered.push(await rasterizer.toPng(html));
       }
@@ -932,6 +963,8 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     hashtags: unknown;
     slides: unknown;
     format: "carousel_full" | "teaser_bio";
+    template: string;
+    slide_count: number | null;
     share_to_story: boolean;
     topic_url: string;
     source_name: string;
@@ -942,9 +975,9 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     story_media_id: string | null;
     story_error: string | null;
   }>(
-    `select d.status, d.caption, d.hashtags, d.slides, d.format, d.share_to_story,
+    `select d.status, d.caption, d.hashtags, d.slides, d.format, d.template, d.share_to_story,
             t.url as topic_url, s.name as source_name,
-            b.public_base_url,
+            b.public_base_url, b.slide_count,
             i.ig_user_id, i.access_token,
             d.ig_media_id, d.story_media_id, d.story_error
      from drafts d
@@ -1026,7 +1059,10 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     );
     const publicBaseUrl = (draft.public_base_url || PUBLIC_BASE_FALLBACK).replace(/\/$/, "");
     const imageUrls = assets.map((asset) => `${publicBaseUrl}/media/${asset.id}`);
-    const selected = slidesForFormat(draft.format, asSlides(draft.slides));
+    const selected = slidesForFormat(draft.format, asSlides(draft.slides), {
+      template: draft.template as SlideTemplate,
+      slideCount: draft.slide_count ?? undefined,
+    });
     const altTexts = assets.map((asset) => selected[asset.slide_index]?.headline ?? "");
     const hashtags = asStringArray(draft.hashtags);
     const caption = `${draft.caption}\n\n${hashtags.map((tag) => `#${tag}`).join(" ")}`;

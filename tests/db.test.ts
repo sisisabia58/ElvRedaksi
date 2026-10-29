@@ -16,10 +16,18 @@ describe("schema", () => {
       "05-contoh-post",
       "06-aturan-carousel",
     ]);
-    const brand = await sql.rows<{ handle: string; pass_threshold: number }>(
-      "select handle, pass_threshold from brand where id = 1",
-    );
-    expect(brand[0]).toMatchObject({ handle: "redaksi", pass_threshold: 70 });
+    const brand = await sql.rows<{
+      name: string;
+      handle: string;
+      pass_threshold: number;
+      default_template: string;
+    }>("select name, handle, pass_threshold, default_template from brand where id = 1");
+    expect(brand[0]).toMatchObject({
+      name: "Analyst Digest",
+      handle: "",
+      pass_threshold: 70,
+      default_template: "berita_pro",
+    });
     await sql.rows(
       "insert into sources (id, name, url, lang) values ($1,$2,$3,$4)",
       ["11111111-1111-1111-1111-111111111111", "Contoh", "https://example.com/feed", "ID"],

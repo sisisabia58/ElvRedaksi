@@ -35,8 +35,11 @@ export default async function Shell({
   children: React.ReactNode;
 }) {
   const sql = await getAppSql();
-  const brandRows = await sql.rows<{ handle: string }>("select handle from brand where id = 1");
-  const handle = brandRows[0]?.handle ?? "redaksi";
+  const brandRows = await sql.rows<{ handle: string; name: string }>(
+    "select handle, name from brand where id = 1",
+  );
+  const handle = brandRows[0]?.handle?.trim() ?? "";
+  const brandName = brandRows[0]?.name?.trim() || "Analyst Digest";
   const spend = await spendSummary(sql, new Date());
   const demoAi = llmBanner().provider === "demo";
   const todayUsd = demoAi ? 0 : spend.today;
@@ -52,8 +55,8 @@ export default async function Shell({
     <div className="min-h-screen flex flex-col md:flex-row text-[var(--ink)]" style={gridStyle}>
       <aside className="hidden md:flex w-[240px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]">
         <div className="px-4 pt-6 pb-4 border-b border-[var(--line)] space-y-1">
-          <p className="text-xs font-semibold tracking-[0.2em] text-[var(--ink)]">REDAKSI</p>
-          <p className="text-sm text-[var(--muted)]">@{handle}</p>
+          <p className="text-xs font-semibold tracking-[0.2em] text-[var(--ink)]">{brandName}</p>
+          {handle ? <p className="text-sm text-[var(--muted)]">@{handle}</p> : null}
         </div>
         <div className="flex-1 py-4 overflow-y-auto">
           <StudioNavLinks items={items} reviewCount={reviewCount} orientation="vertical" />
@@ -84,8 +87,8 @@ export default async function Shell({
       <div className="flex flex-1 flex-col min-w-0">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3">
           <p className="text-sm text-[var(--muted)] md:hidden">
-            <span className="font-semibold tracking-wide text-[var(--ink)]">REDAKSI</span>
-            <span className="ml-2">@{handle}</span>
+            <span className="font-semibold tracking-wide text-[var(--ink)]">{brandName}</span>
+            {handle ? <span className="ml-2">@{handle}</span> : null}
           </p>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--muted)] ml-auto">
             <span>

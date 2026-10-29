@@ -31,7 +31,7 @@ const PAIRS = [
   {
     problem: "Ukuran gambar berganti-ganti",
     answer:
-      "Designer merender slide 1080×1350 di dalam aplikasi. Foto dari situs berita tidak diunduh.",
+      "Designer merender slide 1080×1350. Template Berita Pro memakai foto artikel dan menulis kredit sumber. Template lain tetap grafis atau unggahan operator.",
   },
   {
     problem: "Posting jalan tanpa ada yang meninjau",
@@ -59,7 +59,7 @@ const AGENTS = [
   {
     name: "Designer",
     color: "var(--designer)",
-    body: "Merender template menjadi PNG 1080×1350. Visual dibuat di aplikasi atau diunggah operator.",
+    body: "Merender template menjadi PNG 1080×1350. Berita Pro memakai foto artikel. Template lain dibuat di aplikasi atau diunggah operator.",
   },
 ] as const;
 
@@ -125,10 +125,10 @@ export default function MarketingPage() {
         <section className="px-5 py-12">
           <h2 className="text-2xl font-semibold">Teaser dua slide, dengan kredit sumber</h2>
           <p className="mt-3 text-base leading-relaxed text-[var(--sale-muted)]">
-            Format pendek berisi sampul dan ajakan ke tautan bio. Visual dibuat di dalam aplikasi
-            atau diunggah operator. Foto dari situs berita tidak diunduh dan tidak dipasang dari
-            tautan orang lain. Setiap slide mencantumkan nama sumber. Klik di halaman bio dihitung,
-            lalu pembaca diarahkan ke artikel aslinya.
+            Format pendek berisi sampul dan ajakan ke tautan bio. Template Berita Pro mengunduh
+            foto dari artikel sumber, menyimpannya di cache, dan menulis kredit. Template lain
+            tetap grafis atau unggahan operator. Setiap slide mencantumkan nama sumber. Klik di
+            halaman bio dihitung, lalu pembaca diarahkan ke artikel aslinya.
           </p>
         </section>
 

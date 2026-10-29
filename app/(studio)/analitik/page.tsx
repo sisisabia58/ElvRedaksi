@@ -112,7 +112,9 @@ export default async function AnalitikPage({
     <div className="p-6 md:p-8 space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-2">
-          <p className="text-xs font-semibold tracking-[0.2em] text-[var(--muted)]">INSTAGRAM · @{handle}</p>
+          <p className="text-xs font-semibold tracking-[0.2em] text-[var(--muted)]">
+            {handle ? `INSTAGRAM · @${handle}` : "INSTAGRAM"}
+          </p>
           <h1 className="font-[family-name:var(--font-anton)] text-2xl md:text-3xl uppercase tracking-wide">
             ANALITIK
           </h1>

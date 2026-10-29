@@ -353,12 +353,12 @@ export function createPinnedLookup(hostname: string, addresses: string[]) {
   };
 }
 
-async function readResponseTextLimited(
+async function readResponseBytesLimited(
   response: Awaited<ReturnType<typeof undiciFetch>>,
   maxBytes: number,
-): Promise<string> {
+): Promise<Uint8Array> {
   if (!response.body) {
-    return "";
+    return new Uint8Array();
   }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -387,7 +387,14 @@ async function readResponseTextLimited(
   if (truncated) {
     throw new Error(FETCH_BODY_TOO_LARGE_MESSAGE);
   }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
+async function readResponseTextLimited(
+  response: Awaited<ReturnType<typeof undiciFetch>>,
+  maxBytes: number,
+): Promise<string> {
+  return Buffer.from(await readResponseBytesLimited(response, maxBytes)).toString("utf8");
 }
 
 async function fetchPinnedUrl(
@@ -421,7 +428,13 @@ async function fetchPinnedUrl(
   }
 }
 
-export async function fetchPublicText(url: string, timeoutMs: number): Promise<string> {
+export const MAX_IMAGE_BYTES = 2_000_000;
+
+async function fetchPublicLimited(
+  url: string,
+  timeoutMs: number,
+  maxBytes: number,
+): Promise<{ bytes: Uint8Array; contentType: string }> {
   const deadlineAt = Date.now() + timeoutMs;
   const abortSignal = AbortSignal.timeout(timeoutMs);
   const remainingMs = () => {
@@ -457,12 +470,26 @@ export async function fetchPublicText(url: string, timeoutMs: number): Promise<s
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      return await readResponseTextLimited(response, MAX_FETCH_BYTES);
+      const bytes = await readResponseBytesLimited(response, maxBytes);
+      return { bytes, contentType: response.headers.get("content-type") ?? "" };
     } finally {
       await close();
     }
   }
   throw new Error("Terlalu banyak redirect");
+}
+
+export async function fetchPublicText(url: string, timeoutMs: number): Promise<string> {
+  const { bytes } = await fetchPublicLimited(url, timeoutMs, MAX_FETCH_BYTES);
+  return Buffer.from(bytes).toString("utf8");
+}
+
+export async function fetchPublicBytes(
+  url: string,
+  timeoutMs: number,
+  maxBytes = MAX_IMAGE_BYTES,
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  return fetchPublicLimited(url, timeoutMs, maxBytes);
 }
 
 export { PRIVATE_FETCH_MESSAGE };

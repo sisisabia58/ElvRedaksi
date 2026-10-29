@@ -2,7 +2,7 @@ import type { Slide } from "../agents/copywriter";
 import { can, type Role } from "../auth/rbac";
 import type { Sql } from "../db/client";
 import { assertTransition, type DraftStatus } from "../domain/status";
-import { slidesForFormat } from "../render/html";
+import { slidesForFormat, type SlideTemplate } from "../render/html";
 import { enqueue } from "../jobs/runner";
 
 const COVER_PHOTO_DATA_URL =
@@ -29,7 +29,7 @@ export type DraftCard = {
   id: string;
   status: DraftStatus;
   format: "carousel_full" | "teaser_bio";
-  template: "stabilo" | "foto_penuh" | "serif" | "catatan";
+  template: SlideTemplate;
   score: number | null;
   sensitive: boolean;
   headline: string;
@@ -48,7 +48,7 @@ export type DraftDetail = {
   topicId: string;
   status: DraftStatus;
   format: "carousel_full" | "teaser_bio";
-  template: "stabilo" | "foto_penuh" | "serif" | "catatan";
+  template: SlideTemplate;
   slides: Slide[];
   caption: string;
   hashtags: string[];
@@ -73,7 +73,7 @@ type DraftRow = {
   topic_id: string;
   status: DraftStatus;
   format: "carousel_full" | "teaser_bio";
-  template: "stabilo" | "foto_penuh" | "serif" | "catatan";
+  template: SlideTemplate;
   slides: Slide[] | string;
   caption: string;
   hashtags: string[] | string;
@@ -89,6 +89,7 @@ type DraftRow = {
   sensitive: boolean;
   source_name: string;
   handle: string;
+  slide_count: number;
 };
 
 function parseSlides(raw: Slide[] | string): Slide[] {
@@ -214,7 +215,7 @@ export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCa
               from jsonb_array_elements(d.slides) with ordinality as s(elem, ord)
             ) as slides,
             d.short_code, d.click_count,
-            d.updated_at, d.manual, t.score, t.sensitive, s.name as source_name, b.handle,
+            d.updated_at, d.manual, t.score, t.sensitive, s.name as source_name, b.handle, b.slide_count,
             (select a.id from assets a where a.draft_id = d.id order by a.slide_index limit 1) as asset_id
      from drafts d
      join topics t on t.id = d.topic_id
@@ -228,7 +229,10 @@ export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCa
     const slides = parseSlides(row.slides);
     let slideCount = 2;
     try {
-      slideCount = slidesForFormat(row.format, slides).length;
+      slideCount = slidesForFormat(row.format, slides, {
+        template: row.template,
+        slideCount: row.slide_count,
+      }).length;
     } catch {
       slideCount = Math.max(slides.length, 1);
     }
@@ -263,7 +267,8 @@ export async function getDraft(sql: Sql, id: string): Promise<DraftDetail | null
   const rows = await sql.rows<DraftRow & { updated_at: Date }>(
     `select d.id, d.topic_id, d.status, d.format, d.template, d.slides, d.caption, d.hashtags,
             d.alt_headlines, d.focal_y, d.short_code, d.click_count, d.text_dirty, d.manual,
-            d.scheduled_at, d.error, d.updated_at, t.score, t.sensitive, s.name as source_name, b.handle
+            d.scheduled_at, d.error, d.updated_at, t.score, t.sensitive, s.name as source_name, b.handle,
+            b.slide_count
      from drafts d
      join topics t on t.id = d.topic_id
      join sources s on s.id = t.source_id
@@ -282,7 +287,10 @@ export async function getDraft(sql: Sql, id: string): Promise<DraftDetail | null
   );
   let slideCount = 2;
   try {
-    slideCount = slidesForFormat(row.format, slides).length;
+    slideCount = slidesForFormat(row.format, slides, {
+      template: row.template,
+      slideCount: row.slide_count,
+    }).length;
   } catch {
     slideCount = Math.max(slides.length, 1);
   }
@@ -448,7 +456,7 @@ export async function setTemplate(
   sql: Sql,
   role: Role,
   id: string,
-  template: "stabilo" | "foto_penuh" | "serif" | "catatan",
+  template: SlideTemplate,
 ): Promise<void> {
   requireReviewWrite(role);
   const row = await loadDraftRow(sql, id);

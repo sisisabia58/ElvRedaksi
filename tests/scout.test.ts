@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseFeed } from "../src/rss/parse";
-import { excerptFromHtml } from "../src/rss/excerpt";
+import { excerptFromHtml, imageUrlFromHtml } from "../src/rss/excerpt";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
 import { addSource, deleteSource, listSources } from "../src/studio/sources";
@@ -30,6 +30,26 @@ describe("scout", () => {
       <link href="https://news.example/atom-1" rel="alternate"/></entry></feed>`;
     const atomItems = parseFeed(atomXml);
     expect(atomItems[0]?.url).toBe("https://news.example/atom-1");
+    const withImage = `<?xml version="1.0"?><rss><channel><item><title>Foto</title>
+      <link>https://news.example/foto</link>
+      <enclosure url="https://cdn.example/a.jpg" type="image/jpeg"/>
+      <media:content url="https://cdn.example/ignored.jpg" medium="image"/>
+      </item></channel></rss>`;
+    expect(parseFeed(withImage)[0]?.imageUrl).toBe("https://cdn.example/a.jpg");
+    const audio = `<?xml version="1.0"?><rss><channel><item><title>Audio</title>
+      <link>https://news.example/audio</link>
+      <enclosure url="https://cdn.example/a.mp3" type="audio/mpeg"/>
+      </item></channel></rss>`;
+    expect(parseFeed(audio)[0]?.imageUrl).toBeNull();
+    expect(
+      imageUrlFromHtml(
+        `<meta property="og:image" content="https://cdn.example/og.jpg"><img src="https://cdn.example/secret.jpg">`,
+        "https://news.example/a",
+      ),
+    ).toBe("https://cdn.example/og.jpg");
+    expect(
+      imageUrlFromHtml(`<meta content="/img/rel.jpg" property="og:image">`, "https://news.example/a"),
+    ).toBe("https://news.example/img/rel.jpg");
   });
 
   it("stores a topic, records an empty scan, and schedules the next one", async () => {

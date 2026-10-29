@@ -11,6 +11,9 @@ create table if not exists brand (
   pass_threshold integer not null default 70,
   default_format text not null default 'teaser_bio',
   default_template text not null default 'serif',
+  slide_count integer not null default 3,
+  logo bytea,
+  logo_type text,
   public_base_url text not null default 'http://127.0.0.1:43123',
   constraint brand_one check (id = 1)
 );
@@ -69,7 +72,8 @@ create table if not exists topics (
   blocked boolean not null default false,
   score_reason text,
   scored_at timestamptz,
-  error text
+  error text,
+  image_url text
 );
 
 create table if not exists drafts (
@@ -163,6 +167,14 @@ create table if not exists post_insights (
   saves integer not null default 0,
   shares integer not null default 0,
   synced_at timestamptz not null default now()
+);
+
+create table if not exists image_cache (
+  url_hash text primary key,
+  url text not null,
+  bytes bytea not null,
+  content_type text not null,
+  created_at timestamptz not null default now()
 );
 
 insert into ig_connection (id) values (1) on conflict (id) do nothing;

@@ -63,7 +63,7 @@ export function parseCopy(text: string, sourceName: string): DraftCopy {
 
   const slideCount = rawSlides.length;
   const pointCount = slideCount - 2;
-  if (pointCount < 2 || pointCount > 5) {
+  if (pointCount < 1 || pointCount > 5) {
     invalid();
   }
 

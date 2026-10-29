@@ -1,7 +1,9 @@
 import type { Slide } from "../agents/copywriter";
+import { clampSlideCount, type SlideTemplateName } from "../domain/brand";
 import { SLIDE_HEIGHT, SLIDE_WIDTH } from "../domain/constants";
+import { renderBeritaProHtml } from "./berita-pro";
 
-export type SlideTemplate = "stabilo" | "foto_penuh" | "serif" | "catatan";
+export type SlideTemplate = SlideTemplateName;
 
 export type RenderSlideInput = {
   template: SlideTemplate;
@@ -13,6 +15,13 @@ export type RenderSlideInput = {
   accent: string;
   focalY: number;
   photoDataUrl: string | null;
+  logoDataUrl?: string | null;
+  initial?: string;
+};
+
+export type SlideFormatOptions = {
+  template?: SlideTemplate;
+  slideCount?: number;
 };
 
 const PALETTE = ["#14171c", "#f6ee5f", "#ffffff"] as const;
@@ -94,6 +103,11 @@ body{margin:0;padding:0;}
 </style></head><body>${inner}</body></html>`;
 }
 
+function handleSpan(handle: string): string {
+  const trimmed = handle.trim();
+  return trimmed ? `<span>@${escapeHtml(trimmed)}</span>` : "";
+}
+
 function renderStabilo(input: RenderSlideInput): string {
   const { slide, index, total, handle, sourceName, accent } = input;
   const page = `${index + 1}/${total}`;
@@ -104,7 +118,7 @@ function renderStabilo(input: RenderSlideInput): string {
   <div class="headline" style="font-size:72px;line-height:1.05;flex:1;">${escapeHtml(slide.headline)}</div>
   <div class="body" style="font-size:28px;margin-top:auto;display:flex;justify-content:space-between;">
     <span>Sumber: ${escapeHtml(sourceName)}</span>
-    <span>@${escapeHtml(handle)}</span>
+    ${handleSpan(handle)}
   </div>
 </section>`);
 }
@@ -121,7 +135,7 @@ function renderSerif(input: RenderSlideInput): string {
     <div class="body" style="font-size:28px;color:#333;flex:1;">${escapeHtml(slide.body)}</div>
     <div class="body" style="font-size:26px;color:#555;margin-top:16px;display:flex;justify-content:space-between;">
       <span>Sumber: ${escapeHtml(sourceName)}</span>
-      <span>@${escapeHtml(handle)}</span>
+      ${handleSpan(handle)}
     </div>
   </div>
   <div style="position:relative;height:${bottomH}px;overflow:hidden;">
@@ -164,26 +178,42 @@ export function renderSlideHtml(input: RenderSlideInput): string {
       return renderFotoPenuh(input);
     case "catatan":
       return renderCatatan(input);
+    case "berita_pro":
+      return renderBeritaProHtml(input);
     default:
       return renderSerif(input);
   }
 }
 
-export function slidesForFormat(format: "carousel_full" | "teaser_bio", slides: Slide[]): Slide[] {
+export function slidesForFormat(
+  format: "carousel_full" | "teaser_bio",
+  slides: Slide[],
+  options?: SlideFormatOptions,
+): Slide[] {
   const cover = slides.find((s) => s.role === "cover");
   if (!cover) {
     throw new Error("slide tidak lengkap");
   }
   const picked =
-    format === "teaser_bio"
+    options?.template === "berita_pro"
       ? (() => {
-          const cta = slides.find((s) => s.role === "cta");
-          if (!cta) {
+          const points = slides
+            .filter((slide) => slide.role === "point")
+            .slice(0, clampSlideCount(options.slideCount) - 1);
+          if (points.length === 0) {
             throw new Error("slide tidak lengkap");
           }
-          return [cover, cta];
+          return [cover, ...points];
         })()
-      : [cover, ...slides.filter((s) => s.role === "point")];
+      : format === "teaser_bio"
+        ? (() => {
+            const cta = slides.find((s) => s.role === "cta");
+            if (!cta) {
+              throw new Error("slide tidak lengkap");
+            }
+            return [cover, cta];
+          })()
+        : [cover, ...slides.filter((s) => s.role === "point")];
   if (picked.length < 2 || picked.length > 10) {
     throw new Error("jumlah slide tidak valid");
   }

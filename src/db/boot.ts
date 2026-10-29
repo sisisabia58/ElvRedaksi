@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { hashPassword } from "../auth/password";
+import { DEFAULT_ACCENT } from "../domain/brand";
 import { normalizeCategories, normalizeKicker } from "../domain/tags";
 import { enqueue, type JobName } from "../jobs/runner";
+import { readDefaultLogo } from "../render/brand-logo";
 import type { Sql } from "./client";
 import { seedDefaults } from "./seed";
 import { DDL } from "./sql";
@@ -140,9 +142,57 @@ async function normalizeStoredTags(sql: Sql): Promise<void> {
   }
 }
 
+const SCHEMA_EXTRAS = [
+  "alter table brand add column if not exists slide_count integer not null default 3",
+  "alter table brand add column if not exists logo bytea",
+  "alter table brand add column if not exists logo_type text",
+  "alter table topics add column if not exists image_url text",
+  `create table if not exists image_cache (
+    url_hash text primary key,
+    url text not null,
+    bytes bytea not null,
+    content_type text not null,
+    created_at timestamptz not null default now()
+  )`,
+];
+
+export async function ensureSchemaExtras(sql: Sql): Promise<void> {
+  for (const statement of SCHEMA_EXTRAS) {
+    await sql.rows(statement);
+  }
+}
+
+// Only the untouched seed brand moves to Analyst Digest. Existing drafts stay
+// on their current template until an admin queues a re-render.
+export async function migrateStoredBrand(sql: Sql): Promise<void> {
+  const logo = readDefaultLogo();
+  await sql.rows(`update brand set logo = $1, logo_type = $2 where id = 1 and logo is null`, [
+    logo.bytes,
+    logo.contentType,
+  ]);
+  await sql.rows(
+    `update brand set
+       name = 'Analyst Digest',
+       handle = '',
+       initial = 'A',
+       accent = $1,
+       default_template = 'berita_pro',
+       default_format = 'carousel_full',
+       slide_count = 3
+     where id = 1
+       and name = 'Redaksi'
+       and handle = 'redaksi'
+       and lower(accent) = '#d7ff3a'
+       and default_template = 'serif'`,
+    [DEFAULT_ACCENT],
+  );
+}
+
 export async function boot(sql: Sql): Promise<void> {
   await applyDdl(sql);
+  await ensureSchemaExtras(sql);
   await seedDefaults(sql);
+  await migrateStoredBrand(sql);
   await normalizeStoredTags(sql);
   await normalizeStoredKickers(sql);
   await seedDemoAdmin(sql);

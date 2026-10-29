@@ -21,7 +21,9 @@ export default async function BacaPage() {
           >
             {grid.initial}
           </div>
-          <h1 className="mt-4 text-xl font-semibold tracking-tight">@{grid.handle}</h1>
+          {grid.handle ? (
+            <h1 className="mt-4 text-xl font-semibold tracking-tight">@{grid.handle}</h1>
+          ) : null}
           <p className="mt-3 text-sm leading-relaxed">{INSTRUCTION}</p>
         </header>
 
@@ -52,7 +54,11 @@ export default async function BacaPage() {
         )}
 
         <footer className="space-y-2 px-6 py-8 text-center text-xs leading-relaxed">
-          <p>Konten di @{grid.handle} merangkum berita dari media lain dengan sudut pandang sendiri.</p>
+          <p>
+            {grid.handle
+              ? `Konten di @${grid.handle} merangkum berita dari media lain dengan sudut pandang sendiri.`
+              : "Konten ini merangkum berita dari media lain dengan sudut pandang sendiri."}
+          </p>
           <p>Artikel lengkap dan liputan aslinya ada di situs media sumber.</p>
         </footer>
       </div>

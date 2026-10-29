@@ -32,6 +32,7 @@ describe("brain and settings", () => {
       passThreshold: 75,
       defaultFormat: "carousel_full",
       defaultTemplate: "stabilo",
+      slideCount: 3,
       publicBaseUrl: "https://studio.example.com",
     });
     await saveInstagramToken(sql, "admin", {

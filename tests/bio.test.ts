@@ -23,7 +23,7 @@ describe("bio", () => {
       "cccccccc-cccc-cccc-cccc-ccccccccccc1", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", Buffer.from("png"),
     ]);
     const grid = await bioGrid(sql);
-    expect(grid.handle).toBe("redaksi");
+    expect(grid.handle).toBe("");
     expect(grid.items[0]).toMatchObject({ code: "abcde", sourceName: "Contoh" });
     const prefetch = await resolveShortLink(sql, "abcde", true);
     const real = await resolveShortLink(sql, "abcde", false);

@@ -17,10 +17,28 @@ Contoh JSON valid:
 {"aspects":{"relevansi":16,"emosi":14,"kebaruan":12,"timing":15,"shareability":13},"tags":["marketing"],"sensitive":false,"sensitiveReason":null,"blocked":false,"reason":"Relevan untuk audiens marketing."}`;
 }
 
-export function copySystem(brain: string): string {
+export function copySystem(
+  brain: string,
+  options?: { slideCount?: number; handle?: string },
+): string {
+  const slideCount = options?.slideCount === 2 ? 2 : 3;
+  const points = slideCount - 1;
+  const handle = options?.handle?.trim() ?? "";
+  const follow = handle
+    ? `Slide penutup boleh menyebut @${handle}.`
+    : "Jangan mengarang nama akun Instagram.";
   return `Kamu adalah copywriter redaksi. Baca brain berikut dan tulis carousel Instagram.
 
 ${brain}
 
-Kembalikan hanya JSON slide dan caption sesuai aturan brain.`;
+Aturan jumlah slide ini mengalahkan catatan carousel di brain bila berbeda:
+- Gambar yang tayang paling banyak ${slideCount}: 1 sampul dan ${points} slide isi.
+- JSON tetap diakhiri satu slide role "cta". Slide itu menjaga format teaser. Template Berita Pro tidak menggambarnya sebagai slide terpisah.
+- Sampul (role cover): headline bahasa Indonesia, pertanyaan atau pernyataan pendek, paling banyak 10 kata, tetap sesuai cuplikan.
+- Slide isi (role point): tepat ${points} buah. Headline dan body hanya dari cuplikan. Body sekitar 2–3 kalimat. Jangan menambah angka, nama, kutipan, atau kejadian yang tidak ada di cuplikan.
+- Slide cta: headline berisi ajakan membaca selengkapnya di link bio. ${follow}
+- kicker adalah kategori singkat.
+- Jangan mengarang fakta.
+
+Kembalikan hanya JSON dengan field slides, caption, hashtags, dan altHeadlines.`;
 }
