@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeKicker } from "../domain/tags";
 
 export type Slide = {
   role: "cover" | "point" | "cta";
@@ -73,7 +74,7 @@ export function parseCopy(text: string, sourceName: string): DraftCopy {
     if (!slideResult.success || slideResult.data.role !== expectedRole) {
       invalid();
     }
-    slides.push(slideResult.data);
+    slides.push({ ...slideResult.data, kicker: normalizeKicker(slideResult.data.kicker) });
   }
 
   return {

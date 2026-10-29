@@ -19,6 +19,20 @@ const good = {
 };
 
 describe("copywriter", () => {
+  it("title-cases a shouted or mixed slide category", () => {
+    const copy = parseCopy(
+      JSON.stringify({
+        ...good,
+        slides: good.slides.map((slide, index) =>
+          index === 0 ? { ...slide, kicker: "EKspansi Global" } : slide,
+        ),
+      }),
+      "Contoh",
+    );
+    expect(copy.slides[0]?.kicker).toBe("Ekspansi Global");
+    expect(copy.slides[1]?.kicker).toBe("Fakta");
+  });
+
   it("strips hash marks and casing from hashtags", () => {
     const copy = parseCopy(
       JSON.stringify({ ...good, hashtags: ["#Iklan", " MedSos ", "sumber!"] }),

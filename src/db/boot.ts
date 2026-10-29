@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hashPassword } from "../auth/password";
-import { normalizeCategories } from "../domain/tags";
+import { normalizeCategories, normalizeKicker } from "../domain/tags";
 import { enqueue, type JobName } from "../jobs/runner";
 import type { Sql } from "./client";
 import { seedDefaults } from "./seed";
@@ -84,6 +84,52 @@ function asTags(raw: unknown): string[] {
   return [];
 }
 
+function asSlides(raw: unknown): Array<Record<string, unknown>> {
+  const parsed = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter((slide): slide is Record<string, unknown> => !!slide && typeof slide === "object");
+}
+
+async function normalizeStoredKickers(sql: Sql): Promise<void> {
+  const rows = await sql.rows<{ id: string; slides: unknown; status: string }>(
+    "select id, slides, status from drafts",
+  );
+  for (const row of rows) {
+    let slides: Array<Record<string, unknown>>;
+    try {
+      slides = asSlides(row.slides);
+    } catch {
+      continue;
+    }
+    let changed = false;
+    const next = slides.map((slide) => {
+      if (typeof slide.kicker !== "string") {
+        return slide;
+      }
+      const kicker = normalizeKicker(slide.kicker);
+      if (kicker === slide.kicker) {
+        return slide;
+      }
+      changed = true;
+      return { ...slide, kicker };
+    });
+    if (!changed) {
+      continue;
+    }
+    const rerender = row.status === "needs_review" || row.status === "drafted";
+    await sql.rows(
+      `update drafts
+       set slides = $1::jsonb,
+           text_dirty = case when $2 then true else text_dirty end,
+           updated_at = now()
+       where id = $3 and status = $4`,
+      [JSON.stringify(next), rerender, row.id, row.status],
+    );
+  }
+}
+
 async function normalizeStoredTags(sql: Sql): Promise<void> {
   const rows = await sql.rows<{ id: string; tags: unknown }>("select id, tags from topics");
   for (const row of rows) {
@@ -98,6 +144,7 @@ export async function boot(sql: Sql): Promise<void> {
   await applyDdl(sql);
   await seedDefaults(sql);
   await normalizeStoredTags(sql);
+  await normalizeStoredKickers(sql);
   await seedDemoAdmin(sql);
   for (const name of BOOT_JOBS) {
     await enqueueIfUnfinished(sql, name);

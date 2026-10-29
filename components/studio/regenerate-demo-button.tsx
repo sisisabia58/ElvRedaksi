@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { regenerateDemoDraftsAction } from "@/app/(studio)/review/actions";
 import { Button } from "@/components/ui/button";
+import { demoRewriteSummary } from "@/src/studio/demo-rewrite-summary";
 
 export function RegenerateDemoButton({
   count,
@@ -17,18 +18,15 @@ export function RegenerateDemoButton({
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const summary = demoRewriteSummary({ demoScores: count, done: progress.done, total: progress.total });
 
   return (
     <div className="space-y-2">
       <p className="text-sm text-[var(--muted)]">
-        {count} draf di Perlu review masih memakai skor dan naskah demo. Tombol ini menilai
-        dan menulis ulang draf itu, lalu menggambar ulang slidenya. Status tetap Perlu review.
+        {summary.score} Tombol ini menilai dan menulis ulang draf itu, lalu menggambar ulang
+        slidenya. Status tetap Perlu review.
       </p>
-      {progress.total > 0 ? (
-        <p className="text-sm text-[var(--ink)]">
-          {progress.done} dari {progress.total} selesai
-        </p>
-      ) : null}
+      {summary.queue ? <p className="text-sm text-[var(--ink)]">{summary.queue}</p> : null}
       <Button
         type="button"
         variant="outline"

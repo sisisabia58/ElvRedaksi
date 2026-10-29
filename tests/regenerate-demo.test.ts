@@ -3,6 +3,7 @@ import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
 import { ScriptedLlm } from "../src/llm/provider";
 import { runCopywriter } from "../src/jobs/handlers";
+import { demoRewriteSummary } from "../src/studio/demo-rewrite-summary";
 import { enqueueDemoRegeneration, regenerateProgress } from "../src/studio/regenerate-demo";
 
 const SOURCE = "11111111-1111-1111-1111-111111111111";
@@ -64,6 +65,14 @@ async function seedPair(
 }
 
 describe("demo draft regeneration", () => {
+  it("labels leftover demo scores separately from the rewrite queue", () => {
+    expect(demoRewriteSummary({ demoScores: 30, done: 25, total: 102 })).toEqual({
+      score: "30 draf masih skor demo.",
+      queue: "77 draf masih naskah demo. 25 dari 102 tulis ulang selesai.",
+    });
+    expect(demoRewriteSummary({ demoScores: 0, done: 0, total: 0 }).queue).toBeNull();
+  });
+
   it("requeues only needs_review drafts whose score came from demo mode", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);
