@@ -363,6 +363,83 @@ describe("jobs", () => {
     expect(seen.filter((name) => name === "rewrite")).toHaveLength(2);
   });
 
+  it("reclaims a stale rewrite even when newer rewrites fill the lane window", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    const staleId = "99999999-9999-4999-8999-999999999999";
+    const seen: string[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      await enqueue(sql, {
+        name: "copywriter.write",
+        payload: { regenerateDemo: true, topicId: `fresh-${index}` },
+        runAt: new Date(now.getTime() - 120_000),
+        manual: true,
+      });
+    }
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, locked_at, attempts, manual)
+       values ($1, 'copywriter.write', $2::jsonb, $3, $4, 0, true)`,
+      [
+        staleId,
+        JSON.stringify({ regenerateDemo: true, topicId: "stale" }),
+        new Date(now.getTime() - 30_000),
+        new Date(now.getTime() - 11 * 60_000),
+      ],
+    );
+    const ran = await runDueJobs(sql, now, {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      concurrency: 4,
+      handlers: {
+        ...noopHandlers,
+        "copywriter.write": async (ctx) => {
+          seen.push(String(ctx.payload.topicId));
+        },
+      },
+    });
+    expect(seen).toContain("stale");
+    expect(ran).toBe(4);
+    const row = await sql.rows<{ locked_at: Date | null; finished_at: Date | null }>(
+      "select locked_at, finished_at from jobs where id = $1",
+      [staleId],
+    );
+    expect(row[0]?.finished_at).not.toBeNull();
+    expect(row[0]?.locked_at).toBeNull();
+  });
+
+  it("finishes a job when the lock timestamp has extra microseconds", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    const jobId = "abababab-abab-4bab-8bab-abababababab";
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, attempts)
+       values ($1, 'publisher.publish', $2::jsonb, $3, 0)`,
+      [jobId, JSON.stringify({ id: jobId }), now],
+    );
+    const ran = await runDueJobs(sql, now, {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      handlers: {
+        ...noopHandlers,
+        "publisher.publish": async () => {
+          await sql.rows(
+            `update jobs set locked_at = locked_at + interval '250 microseconds' where id = $1`,
+            [jobId],
+          );
+        },
+      },
+    });
+    expect(ran).toBe(1);
+    const row = await sql.rows<{ locked_at: Date | null; finished_at: Date | null }>(
+      "select locked_at, finished_at from jobs where id = $1",
+      [jobId],
+    );
+    expect(row[0]?.finished_at).not.toBeNull();
+    expect(row[0]?.locked_at).toBeNull();
+  });
+
   it("reschedules a Gemini 429 and finishes only after repeated limits", async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-29T13:00:00Z");

@@ -113,6 +113,10 @@ function nextWorkStart(now: Date, workStart: string, timeZone = TIME_ZONE): Date
   return start;
 }
 
+function sameLock(param: string): string {
+  return `date_trunc('milliseconds', locked_at) = date_trunc('milliseconds', ${param}::timestamptz)`;
+}
+
 function parsePayload(raw: Record<string, unknown> | string): Record<string, unknown> {
   if (typeof raw === "string") {
     return JSON.parse(raw) as Record<string, unknown>;
@@ -150,7 +154,14 @@ function jobRank(name: JobName, payload: Record<string, unknown>): number {
 function selectFairBatch(rows: DueRow[], concurrency: number): DueRow[] {
   const ranked = rows
     .map((row) => ({ row, payload: parsePayload(row.payload), at: new Date(row.run_at).getTime() }))
-    .sort((a, b) => jobRank(a.row.name, a.payload) - jobRank(b.row.name, b.payload) || a.at - b.at);
+    .sort((a, b) => {
+      const rank = jobRank(a.row.name, a.payload) - jobRank(b.row.name, b.payload);
+      if (rank !== 0) return rank;
+      const aLocked = a.row.locked_at == null ? 1 : 0;
+      const bLocked = b.row.locked_at == null ? 1 : 0;
+      if (aLocked !== bLocked) return aLocked - bLocked;
+      return a.at - b.at;
+    });
   const selected: DueRow[] = [];
   const chosen = new Set<string>();
   const take = (row: DueRow) => {
@@ -198,8 +209,8 @@ async function claimDueJobs(sql: Sql, now: Date, concurrency: number): Promise<C
   const otherStaleBefore = new Date(now.getTime() - DEFAULT_LOCK_STALE_MS);
   return sql.tx(async (tx) => {
     const rows = await tx.rows<DueRow>(
-      `with due as (
-         select id, run_at,
+      `       with due as (
+         select id, run_at, locked_at,
            case
              when name = 'designer.render' then 'design'
              when name = 'copywriter.write' and coalesce(payload->>'regenerateDemo', '') = 'true' then 'rewrite'
@@ -215,7 +226,7 @@ async function claimDueJobs(sql: Sql, now: Date, concurrency: number): Promise<C
            )
        ),
        ranked as (
-         select id, lane, row_number() over (partition by lane order by run_at) as rn
+         select id, lane, locked_at, row_number() over (partition by lane order by run_at) as rn
          from due
        ),
        picked as (
@@ -223,6 +234,7 @@ async function claimDueJobs(sql: Sql, now: Date, concurrency: number): Promise<C
          where (lane = 'design' and rn <= 8)
             or (lane = 'normal' and rn <= 8)
             or (lane = 'rewrite' and rn <= 24)
+            or locked_at is not null
        )
        select j.id, j.name, j.payload, j.manual, j.attempts, j.locked_at, j.run_at
        from jobs j
@@ -275,7 +287,7 @@ async function enqueueDirtySlideRenders(sql: Sql, now: Date): Promise<void> {
 
 async function releaseJobLock(sql: Sql, jobId: string, token: Date): Promise<void> {
   try {
-    await sql.rows(`update jobs set locked_at = null where id = $1 and locked_at = $2`, [jobId, token]);
+    await sql.rows(`update jobs set locked_at = null where id = $1 and ${sameLock("$2")}`, [jobId, token]);
   } catch {
     // A bookkeeping failure on one job must not abort the rest of the batch.
   }
@@ -283,7 +295,7 @@ async function releaseJobLock(sql: Sql, jobId: string, token: Date): Promise<voi
 
 async function refreshJobLock(sql: Sql, job: ClaimedJob, start: Date): Promise<boolean> {
   const refreshed = await sql.rows<{ id: string }>(
-    `update jobs set locked_at = $1 where id = $2 and locked_at = $3 returning id`,
+    `update jobs set locked_at = $1 where id = $2 and ${sameLock("$3")} returning id`,
     [start, job.id, job.lockToken],
   );
   if (refreshed.length === 0) {
@@ -309,7 +321,7 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
       try {
         const runAt = nextWorkStart(now, deps.workStart);
         await sql.rows(
-          `update jobs set locked_at = null, run_at = $1 where id = $2 and locked_at = $3`,
+          `update jobs set locked_at = null, run_at = $1 where id = $2 and ${sameLock("$3")}`,
           [runAt, job.id, job.lockToken],
         );
       } catch {
@@ -330,7 +342,7 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
       await deps.handlers[job.name](ctx);
       try {
         const finished = await sql.rows<{ id: string }>(
-          `update jobs set finished_at = $1, locked_at = null where id = $2 and locked_at = $3 returning id`,
+          `update jobs set finished_at = $1, locked_at = null where id = $2 and ${sameLock("$3")} returning id`,
           [now, job.id, job.lockToken],
         );
         return finished.length > 0;
@@ -345,12 +357,12 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
         try {
           if (attempts < RATE_LIMIT_ATTEMPTS) {
             await sql.rows(
-              `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4 and locked_at = $5`,
+              `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4 and ${sameLock("$5")}`,
               [attempts, message, new Date(now.getTime() + delay), job.id, job.lockToken],
             );
           } else {
             await sql.rows(
-              `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4 and locked_at = $5`,
+              `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4 and ${sameLock("$5")}`,
               [attempts, message, now, job.id, job.lockToken],
             );
           }
@@ -365,12 +377,12 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
         if (attempts < 3) {
           const retryAt = new Date(now.getTime() + 5 * 60_000);
           await sql.rows(
-            `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4 and locked_at = $5`,
+            `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4 and ${sameLock("$5")}`,
             [attempts, message, retryAt, job.id, job.lockToken],
           );
         } else {
           await sql.rows(
-            `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4 and locked_at = $5`,
+            `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4 and ${sameLock("$5")}`,
             [attempts, message, now, job.id, job.lockToken],
           );
         }
