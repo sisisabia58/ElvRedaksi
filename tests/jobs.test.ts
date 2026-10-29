@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { POST } from "../app/api/cron/route";
 import { createTestSql } from "../src/db/client";
 import type { Sql } from "../src/db/client";
+import { LlmRateLimitError } from "../src/llm/provider";
 import { enqueue, runDueJobs, type JobDeps } from "../src/jobs/runner";
 
 const noopHandlers: JobDeps["handlers"] = {
@@ -39,7 +40,7 @@ describe("jobs", () => {
     await enqueue(sql, { name: "publisher.publish", payload: { id: "d1" }, runAt: night, manual: false });
     const ran = await runDueJobs(sql, night, deps);
     expect(ran).toBe(2);
-    expect(seen).toEqual(["scout", "publish"]);
+    expect(seen.sort()).toEqual(["publish", "scout"]);
     const waiting = await sql.rows<{ finished_at: string | null }>(
       "select finished_at from jobs where payload->>'auto' = 'true'",
     );
@@ -257,5 +258,190 @@ describe("jobs", () => {
     expect(row[0]?.finished_at).toBeNull();
     const lockedAt = row[0]?.locked_at instanceof Date ? row[0].locked_at : new Date(String(row[0]?.locked_at));
     expect(lockedAt.getTime()).toBe(ownerLock.getTime());
+  });
+
+  it("keeps a scout and a designer ahead of a rewrite backlog", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    const seen: string[] = [];
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      concurrency: 4,
+      handlers: {
+        ...noopHandlers,
+        "scout.scan": async () => {
+          seen.push("scout");
+        },
+        "designer.render": async () => {
+          seen.push("designer");
+        },
+        "copywriter.write": async () => {
+          seen.push("rewrite");
+        },
+      },
+    };
+    for (let index = 0; index < 6; index += 1) {
+      await enqueue(sql, {
+        name: "copywriter.write",
+        payload: { regenerateDemo: true, topicId: `topic-${index}` },
+        runAt: new Date(now.getTime() - 60_000),
+        manual: true,
+      });
+    }
+    await enqueue(sql, {
+      name: "designer.render",
+      payload: { draftId: "draft-new" },
+      runAt: now,
+      manual: true,
+    });
+    await enqueue(sql, {
+      name: "scout.scan",
+      payload: {},
+      runAt: now,
+      manual: true,
+    });
+
+    const ran = await runDueJobs(sql, now, deps);
+    expect(ran).toBe(4);
+    expect(seen.filter((name) => name === "scout")).toHaveLength(1);
+    expect(seen.filter((name) => name === "designer")).toHaveLength(1);
+    expect(seen.filter((name) => name === "rewrite")).toHaveLength(2);
+    const open = await sql.rows<{ count: number }>(
+      "select count(*)::int as count from jobs where finished_at is null",
+    );
+    expect(Number(open[0]?.count)).toBe(4);
+  });
+
+  it("reschedules a Gemini 429 and finishes only after repeated limits", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { regenerateDemo: true },
+      runAt: now,
+      manual: true,
+    });
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      handlers: {
+        ...noopHandlers,
+        "copywriter.write": async () => {
+          throw new LlmRateLimitError(7_000, "Gemini 429");
+        },
+      },
+    };
+
+    await runDueJobs(sql, now, deps);
+    const waiting = await sql.rows<{
+      attempts: number;
+      finished_at: Date | string | null;
+      locked_at: Date | string | null;
+      error: string;
+      run_at: Date | string;
+    }>("select attempts, finished_at, locked_at, error, run_at from jobs");
+    expect(waiting[0]?.attempts).toBe(1);
+    expect(waiting[0]?.finished_at).toBeNull();
+    expect(waiting[0]?.locked_at).toBeNull();
+    expect(waiting[0]?.error).toMatch(/Gemini 429/);
+    const runAt = waiting[0]?.run_at instanceof Date ? waiting[0].run_at : new Date(String(waiting[0]?.run_at));
+    expect(runAt.getTime()).toBe(now.getTime() + 7_000);
+
+    await sql.rows("update jobs set attempts = 7, run_at = $1, locked_at = null", [now]);
+    await runDueJobs(sql, now, deps);
+    const done = await sql.rows<{ attempts: number; finished_at: Date | string | null; locked_at: Date | string | null }>(
+      "select attempts, finished_at, locked_at from jobs",
+    );
+    expect(done[0]?.attempts).toBe(8);
+    expect(done[0]?.finished_at).not.toBeNull();
+    expect(done[0]?.locked_at).toBeNull();
+  });
+
+  it("queues a fresh slide render for a dirty review draft and runs it before older rewrites", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    const source = "11111111-1111-1111-1111-111111111111";
+    const topic = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    const draft = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    const stale = "cccccccc-cccc-cccc-cccc-ccccccccccc1";
+    const failed = "dddddddd-dddd-dddd-dddd-ddddddddddd1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      source,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)",
+      [topic, source, "12 merek", "https://news.example/merek"],
+    );
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, text_dirty, updated_at)
+       values ($1,$2,'needs_review','carousel_full','serif','[]'::jsonb,'caption lama','[]'::jsonb,'[]'::jsonb,'merek1',true,$3)`,
+      [draft, topic, new Date(now.getTime() - 60_000)],
+    );
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, finished_at, attempts)
+       values ($1, 'designer.render', $2::jsonb, $3, $3, 0)`,
+      [stale, JSON.stringify({ draftId: draft }), new Date(now.getTime() - 120_000)],
+    );
+    const seen: string[] = [];
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      concurrency: 4,
+      handlers: {
+        ...noopHandlers,
+        "designer.render": async (ctx) => {
+          seen.push(String(ctx.payload.draftId));
+        },
+        "copywriter.write": async () => {
+          seen.push("rewrite");
+        },
+      },
+    };
+    for (let index = 0; index < 6; index += 1) {
+      await enqueue(sql, {
+        name: "copywriter.write",
+        payload: { regenerateDemo: true, topicId: `topic-${index}` },
+        runAt: new Date(now.getTime() - 90_000),
+        manual: true,
+      });
+    }
+
+    const ran = await runDueJobs(sql, now, deps);
+    expect(seen).toContain(draft);
+    expect(seen.filter((name) => name === "rewrite").length).toBeGreaterThan(0);
+    expect(ran).toBe(4);
+
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, text_dirty, updated_at)
+       values ($1,$2,'needs_review','carousel_full','serif','[]'::jsonb,'caption','[]'::jsonb,'[]'::jsonb,'merek2',true,$3)`,
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2", topic, new Date(now.getTime() - 30_000)],
+    );
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, finished_at, attempts, error)
+       values ($1, 'designer.render', $2::jsonb, $3, $4, 3, 'render gagal')`,
+      [
+        failed,
+        JSON.stringify({ draftId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2" }),
+        now,
+        now,
+      ],
+    );
+    const before = await sql.rows<{ count: number }>(
+      `select count(*)::int as count from jobs where payload->>'draftId' = $1`,
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2"],
+    );
+    await runDueJobs(sql, now, { ...deps, tickBudgetMs: 1_000 });
+    const after = await sql.rows<{ count: number }>(
+      `select count(*)::int as count from jobs where payload->>'draftId' = $1`,
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2"],
+    );
+    expect(Number(after[0]?.count)).toBe(Number(before[0]?.count));
   });
 });

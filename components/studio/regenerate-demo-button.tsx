@@ -2,10 +2,17 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { regenerateDemoDraftsAction } from "@/app/(studio)/review/actions";
 import { Button } from "@/components/ui/button";
 
-export function RegenerateDemoButton({ count }: { count: number }) {
+export function RegenerateDemoButton({
+  count,
+  progress,
+}: {
+  count: number;
+  progress: { done: number; total: number };
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -17,6 +24,11 @@ export function RegenerateDemoButton({ count }: { count: number }) {
         {count} draf di Perlu review masih memakai skor dan naskah demo. Tombol ini menilai
         dan menulis ulang draf itu, lalu menggambar ulang slidenya. Status tetap Perlu review.
       </p>
+      {progress.total > 0 ? (
+        <p className="text-sm text-[var(--ink)]">
+          {progress.done} dari {progress.total} selesai
+        </p>
+      ) : null}
       <Button
         type="button"
         variant="outline"
@@ -29,13 +41,15 @@ export function RegenerateDemoButton({ count }: { count: number }) {
             const result = await regenerateDemoDraftsAction();
             if (!result.ok) {
               setError(result.error);
+              toast.error(result.error);
               return;
             }
-            setMessage(
+            const notice =
               result.queued === 0
                 ? "Tidak ada draf demo di Perlu review."
-                : `${result.queued} draf masuk antrean. Status tetap Perlu review.`,
-            );
+                : `${result.queued} draf masuk antrian tulis ulang`;
+            setMessage(notice);
+            toast.success(notice);
             router.refresh();
           });
         }}

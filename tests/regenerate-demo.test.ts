@@ -3,7 +3,7 @@ import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
 import { ScriptedLlm } from "../src/llm/provider";
 import { runCopywriter } from "../src/jobs/handlers";
-import { enqueueDemoRegeneration } from "../src/studio/regenerate-demo";
+import { enqueueDemoRegeneration, regenerateProgress } from "../src/studio/regenerate-demo";
 
 const SOURCE = "11111111-1111-1111-1111-111111111111";
 const DEMO_TOPIC = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
@@ -32,7 +32,7 @@ const newCopy = {
 
 const newScore = {
   aspects: { relevansi: 18, emosi: 17, kebaruan: 16, timing: 15, shareability: 14 },
-  tags: ["berita"],
+  tags: ["EKspansi Global"],
   sensitive: false,
   sensitiveReason: null,
   blocked: false,
@@ -123,23 +123,26 @@ describe("demo draft regeneration", () => {
       now: new Date("2026-10-29T12:00:00Z"),
       llm: new ScriptedLlm([JSON.stringify(newScore), JSON.stringify(newCopy)]),
     });
-    const draft = await sql.rows<{ status: string; caption: string }>(
-      "select status, caption from drafts where id = $1",
+    const draft = await sql.rows<{ status: string; caption: string; text_dirty: boolean }>(
+      "select status, caption, text_dirty from drafts where id = $1",
       [DEMO_DRAFT],
     );
     expect(draft[0]).toMatchObject({
       status: "needs_review",
       caption: newCopy.caption,
+      text_dirty: true,
     });
-    const topic = await sql.rows<{ state: string; score_reason: string; score: number }>(
-      "select state, score_reason, score from topics where id = $1",
+    const topic = await sql.rows<{ state: string; score_reason: string; score: number; tags: string[] | string }>(
+      "select state, score_reason, score, tags from topics where id = $1",
       [DEMO_TOPIC],
     );
+    const tags = typeof topic[0]?.tags === "string" ? JSON.parse(topic[0].tags) : topic[0]?.tags;
     expect(topic[0]).toMatchObject({
       state: "drafted",
       score_reason: "Skor dari model sungguhan.",
       score: 80,
     });
+    expect(tags).toEqual(["Ekspansi Global"]);
     const jobs = await sql.rows<{ name: string }>("select name from jobs");
     expect(jobs.map((job) => job.name)).toEqual(["designer.render"]);
   });
@@ -173,5 +176,21 @@ describe("demo draft regeneration", () => {
     expect(draft[0]).toMatchObject({ status: "approved", caption: "Caption lama dari Contoh." });
     const jobs = await sql.rows("select id from jobs");
     expect(jobs).toHaveLength(0);
+  });
+
+  it("counts finished rewrites separately from jobs that are still open or failed", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    async function job(id: string, finished: Date | null, error: string | null) {
+      await sql.rows(
+        `insert into jobs (id, name, payload, run_at, finished_at, error, attempts)
+         values ($1, 'copywriter.write', $2::jsonb, $3, $4, $5, 0)`,
+        [id, JSON.stringify({ regenerateDemo: true }), now, finished, error],
+      );
+    }
+    await job("11111111-1111-4111-8111-111111111111", now, null);
+    await job("22222222-2222-4222-8222-222222222222", now, "naskah tidak valid");
+    await job("33333333-3333-4333-8333-333333333333", null, null);
+    expect(await regenerateProgress(sql)).toEqual({ done: 1, total: 3 });
   });
 });

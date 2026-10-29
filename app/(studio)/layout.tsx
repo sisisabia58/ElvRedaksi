@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Shell from "@/components/studio/shell";
+import { Toaster } from "@/components/ui/sonner";
 import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 
@@ -22,5 +23,10 @@ export default async function StudioLayout({ children }: { children: React.React
   if (!user) {
     redirect("/login");
   }
-  return <Shell user={user}>{children}</Shell>;
+  return (
+    <>
+      <Shell user={user}>{children}</Shell>
+      <Toaster />
+    </>
+  );
 }

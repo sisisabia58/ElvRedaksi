@@ -7,15 +7,24 @@ export type Sql = {
 };
 
 function fromPglite(pg: PGlite): Sql {
-  const sql: Sql = {
+  let chain: Promise<void> = Promise.resolve();
+  function withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = chain;
+    let release!: () => void;
+    chain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return previous.then(fn).finally(release);
+  }
+  const inner: Sql = {
     async rows<T>(text: string, params: unknown[] = []) {
       const result = await pg.query<T>(text, params);
       return result.rows;
     },
-    async tx<T>(fn: (inner: Sql) => Promise<T>) {
+    async tx<T>(fn: (tx: Sql) => Promise<T>) {
       await pg.query("begin");
       try {
-        const value = await fn(sql);
+        const value = await fn(inner);
         await pg.query("commit");
         return value;
       } catch (error) {
@@ -24,7 +33,10 @@ function fromPglite(pg: PGlite): Sql {
       }
     },
   };
-  return sql;
+  return {
+    rows: (text, params) => withLock(() => inner.rows(text, params)),
+    tx: (fn) => withLock(() => inner.tx(fn)),
+  };
 }
 
 export async function createTestSql(): Promise<Sql> {

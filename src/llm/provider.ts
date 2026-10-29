@@ -171,10 +171,37 @@ const COPY_RESPONSE_SCHEMA = {
   required: ["slides", "caption", "hashtags", "altHeadlines"],
 };
 
+export class LlmRateLimitError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(retryAfterMs: number, message = "Gemini 429") {
+    super(message);
+    this.name = "LlmRateLimitError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+type GeminiResponse = {
+  ok: boolean;
+  status: number;
+  headers?: { get(name: string): string | null };
+  json: () => Promise<unknown>;
+};
+
 type GeminiFetch = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
-) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
+) => Promise<GeminiResponse>;
+
+const GEMINI_TIMEOUT_MS = 20_000;
+
+function retryAfterMs(res: GeminiResponse): number {
+  const header = res.headers?.get("retry-after");
+  if (header && /^\d+$/.test(header)) {
+    return Number(header) * 1000;
+  }
+  return GEMINI_TIMEOUT_MS;
+}
 
 export class GeminiLlm implements LlmProvider {
   constructor(private readonly fetchImpl: GeminiFetch = (url, init) => fetch(url, init)) {}
@@ -185,24 +212,36 @@ export class GeminiLlm implements LlmProvider {
       throw new Error("GEMINI_API_KEY missing");
     }
     const model = process.env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
-    const res = await this.fetchImpl(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: req.system }] },
-          contents: [{ role: "user", parts: [{ text: req.user }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: req.purpose === "score" ? SCORE_RESPONSE_SCHEMA : COPY_RESPONSE_SCHEMA,
+    let res: GeminiResponse;
+    try {
+      res = await this.fetchImpl(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
           },
-        }),
-      },
-    );
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: req.system }] },
+            contents: [{ role: "user", parts: [{ text: req.user }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema: req.purpose === "score" ? SCORE_RESPONSE_SCHEMA : COPY_RESPONSE_SCHEMA,
+            },
+          }),
+          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+        },
+      );
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new LlmRateLimitError(GEMINI_TIMEOUT_MS, "Gemini timeout");
+      }
+      throw error;
+    }
+    if (res.status === 429) {
+      throw new LlmRateLimitError(retryAfterMs(res));
+    }
     if (!res.ok) {
       throw new Error(`Gemini ${res.status}`);
     }

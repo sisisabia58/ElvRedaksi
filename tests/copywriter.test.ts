@@ -19,6 +19,14 @@ const good = {
 };
 
 describe("copywriter", () => {
+  it("strips hash marks and casing from hashtags", () => {
+    const copy = parseCopy(
+      JSON.stringify({ ...good, hashtags: ["#Iklan", " MedSos ", "sumber!"] }),
+      "Contoh",
+    );
+    expect(copy.hashtags).toEqual(["iklan", "medsos", "sumber"]);
+  });
+
   it("rejects a carousel that forgets the source", () => {
     expect(() => parseCopy(JSON.stringify({ ...good, caption: "Tanpa nama media." }), "Contoh")).toThrow(
       /naskah tidak valid/,

@@ -34,6 +34,12 @@ export function parseCopy(text: string, sourceName: string): DraftCopy {
   } catch {
     invalid();
   }
+  if (parsed && typeof parsed === "object" && "hashtags" in parsed && Array.isArray(parsed.hashtags)) {
+    parsed.hashtags = parsed.hashtags
+      .filter((tag): tag is string => typeof tag === "string")
+      .map((tag) => tag.trim().replace(/^#+/, "").toLowerCase().replace(/[^a-z0-9]/g, ""))
+      .filter((tag) => tag.length > 0);
+  }
 
   const root = z
     .object({

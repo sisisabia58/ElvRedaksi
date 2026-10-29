@@ -38,11 +38,13 @@ export function PengaturanForm({
   showMetaBanner,
   llmBanner,
   demoReviewCount,
+  regenerateProgress,
 }: {
   settings: Settings;
   showMetaBanner: boolean;
   llmBanner: string;
   demoReviewCount: number;
+  regenerateProgress: { done: number; total: number };
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -126,7 +128,7 @@ export function PengaturanForm({
       <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
         {llmBanner}
       </p>
-      <RegenerateDemoButton count={demoReviewCount} />
+      <RegenerateDemoButton count={demoReviewCount} progress={regenerateProgress} />
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">

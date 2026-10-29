@@ -40,6 +40,7 @@ export function ReviewPanel({
   canWrite,
   isAdmin,
   demoReviewCount,
+  regenerateProgress,
 }: {
   cards: ReviewCardView[];
   status: DraftStatus;
@@ -48,6 +49,7 @@ export function ReviewPanel({
   canWrite: boolean;
   isAdmin: boolean;
   demoReviewCount: number;
+  regenerateProgress: { done: number; total: number };
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -98,7 +100,7 @@ export function ReviewPanel({
           tim.
         </p>
         {isAdmin && status === "needs_review" ? (
-          <RegenerateDemoButton count={demoReviewCount} />
+          <RegenerateDemoButton count={demoReviewCount} progress={regenerateProgress} />
         ) : null}
       </div>
 

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AspectScores } from "../domain/score";
+import { normalizeCategories } from "../domain/tags";
 
 const aspectField = z.number().int().min(0).max(20);
 
@@ -38,5 +39,5 @@ export function scoreTopic(text: string): {
   if (!result.success) {
     throw new Error("skor tidak valid");
   }
-  return result.data;
+  return { ...result.data, tags: normalizeCategories(result.data.tags) };
 }

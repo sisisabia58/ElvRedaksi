@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Sql } from "../db/client";
 import { TIME_ZONE } from "../domain/constants";
 import { isWithinWorkHours } from "../domain/time";
+import { LlmRateLimitError } from "../llm/provider";
 
 export type JobName =
   | "scout.scan"
@@ -24,6 +25,10 @@ export type JobDeps = {
   handlers: Record<JobName, (ctx: JobCtx) => Promise<void>>;
   workStart: string;
   workEnd: string;
+  /** How long one cron tick may keep starting work. Defaults to 45s. */
+  tickBudgetMs?: number;
+  /** Jobs started together. Defaults to 4. */
+  concurrency?: number;
 };
 
 const WORK_HOUR_GATED: Set<JobName> = new Set([
@@ -45,7 +50,11 @@ type ClaimedJob = {
 };
 
 const PUBLISHER_LOCK_STALE_MS = 60_000;
-const DEFAULT_LOCK_STALE_MS = 10 * 60_000;
+const DEFAULT_LOCK_STALE_MS = 3 * 60_000;
+const TICK_BUDGET_MS = 45_000;
+const CONCURRENCY = 4;
+const DESIGNER_SLOTS = 2;
+const RATE_LIMIT_ATTEMPTS = 8;
 
 function calendarParts(date: Date, timeZone: string) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
@@ -121,19 +130,75 @@ export async function enqueue(
   );
 }
 
-async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
+type DueRow = {
+  id: string;
+  name: JobName;
+  payload: Record<string, unknown> | string;
+  manual: boolean;
+  attempts: number;
+  locked_at: Date | string | null;
+  run_at: Date | string;
+};
+
+function jobRank(name: JobName, payload: Record<string, unknown>): number {
+  if (name === "publisher.publish") return 0;
+  if (name === "designer.render") return 2;
+  if (name === "copywriter.write" && payload.regenerateDemo === true) return 3;
+  return 1;
+}
+
+function selectFairBatch(rows: DueRow[], concurrency: number): DueRow[] {
+  const ranked = rows
+    .map((row) => ({ row, payload: parsePayload(row.payload), at: new Date(row.run_at).getTime() }))
+    .sort((a, b) => jobRank(a.row.name, a.payload) - jobRank(b.row.name, b.payload) || a.at - b.at);
+  const selected: DueRow[] = [];
+  const chosen = new Set<string>();
+  const take = (row: DueRow) => {
+    if (chosen.has(row.id) || selected.length >= concurrency) return;
+    chosen.add(row.id);
+    selected.push(row);
+  };
+  const normal = ranked.filter((item) => jobRank(item.row.name, item.payload) <= 1);
+  if (normal[0]) take(normal[0].row);
+  const designers = ranked.filter((item) => item.row.name === "designer.render");
+  const rewrites = ranked.filter((item) => jobRank(item.row.name, item.payload) === 3);
+  let designerCount = 0;
+  let di = 0;
+  let ri = 0;
+  while (selected.length < concurrency && (di < designers.length || ri < rewrites.length)) {
+    if (designerCount < DESIGNER_SLOTS && di < designers.length) {
+      take(designers[di].row);
+      designerCount += 1;
+      di += 1;
+      continue;
+    }
+    if (ri < rewrites.length) {
+      take(rewrites[ri].row);
+      ri += 1;
+      continue;
+    }
+    if (di < designers.length) {
+      take(designers[di].row);
+      di += 1;
+      continue;
+    }
+    break;
+  }
+  for (const item of normal) {
+    take(item.row);
+  }
+  for (const item of ranked) {
+    take(item.row);
+  }
+  return selected;
+}
+
+async function claimDueJobs(sql: Sql, now: Date, concurrency: number): Promise<ClaimedJob[]> {
   const publishStaleBefore = new Date(now.getTime() - PUBLISHER_LOCK_STALE_MS);
   const otherStaleBefore = new Date(now.getTime() - DEFAULT_LOCK_STALE_MS);
   return sql.tx(async (tx) => {
-    const rows = await tx.rows<{
-      id: string;
-      name: JobName;
-      payload: Record<string, unknown> | string;
-      manual: boolean;
-      attempts: number;
-      locked_at: Date | string | null;
-    }>(
-      `select id, name, payload, manual, attempts, locked_at
+    const rows = await tx.rows<DueRow>(
+      `select id, name, payload, manual, attempts, locked_at, run_at
        from jobs
        where run_at <= $1
          and finished_at is null
@@ -143,14 +208,15 @@ async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
            or (name <> 'publisher.publish' and locked_at < $3)
          )
        order by run_at
-       limit 5
+       limit 40
        for update skip locked`,
       [now, publishStaleBefore, otherStaleBefore],
     );
-    for (const row of rows) {
+    const picked = selectFairBatch(rows, concurrency);
+    for (const row of picked) {
       await tx.rows(`update jobs set locked_at = $1 where id = $2`, [now, row.id]);
     }
-    return rows.map((row) => ({
+    return picked.map((row) => ({
       id: row.id,
       name: row.name,
       payload: parsePayload(row.payload),
@@ -161,6 +227,32 @@ async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
       lostLock: false,
     }));
   });
+}
+
+async function enqueueDirtySlideRenders(sql: Sql, now: Date): Promise<void> {
+  const rows = await sql.rows<{ id: string }>(
+    `select d.id
+     from drafts d
+     where d.status = 'needs_review'
+       and d.text_dirty = true
+       and not exists (
+         select 1 from jobs j
+         where j.name = 'designer.render'
+           and j.payload->>'draftId' = d.id::text
+           and (
+             j.finished_at is null
+             or j.finished_at >= d.updated_at
+           )
+       )`,
+  );
+  for (const row of rows) {
+    await enqueue(sql, {
+      name: "designer.render",
+      payload: { draftId: row.id },
+      runAt: now,
+      manual: true,
+    });
+  }
 }
 
 async function releaseJobLock(sql: Sql, jobId: string, token: Date): Promise<void> {
@@ -228,6 +320,27 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
         return false;
       }
     } catch (error) {
+      if (error instanceof LlmRateLimitError) {
+        const attempts = job.attempts + 1;
+        const message = error.message;
+        const delay = Math.min(120_000, Math.max(error.retryAfterMs, 5_000) * 2 ** Math.max(0, attempts - 1));
+        try {
+          if (attempts < RATE_LIMIT_ATTEMPTS) {
+            await sql.rows(
+              `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4 and locked_at = $5`,
+              [attempts, message, new Date(now.getTime() + delay), job.id, job.lockToken],
+            );
+          } else {
+            await sql.rows(
+              `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4 and locked_at = $5`,
+              [attempts, message, now, job.id, job.lockToken],
+            );
+          }
+        } catch {
+          // retry bookkeeping failure; lock cleared in finally
+        }
+        return false;
+      }
       const attempts = job.attempts + 1;
       const message = error instanceof Error ? error.message : String(error);
       try {
@@ -256,20 +369,32 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
 }
 
 export async function runDueJobs(sql: Sql, now: Date, deps: JobDeps): Promise<number> {
-  const claimed = await claimDueJobs(sql, now);
+  const budgetMs = deps.tickBudgetMs ?? TICK_BUDGET_MS;
+  const concurrency = deps.concurrency ?? CONCURRENCY;
+  const deadline = Date.now() + budgetMs;
   let ran = 0;
+  await enqueueDirtySlideRenders(sql, now);
 
-  try {
-    for (const job of claimed) {
-      if (await runClaimedJob(sql, job, now, deps)) {
-        ran += 1;
+  while (Date.now() < deadline) {
+    if (ran > 0 && deadline - Date.now() < 12_000) {
+      break;
+    }
+    const claimed = await claimDueJobs(sql, now, concurrency);
+    if (claimed.length === 0) {
+      break;
+    }
+    try {
+      const outcomes = await Promise.all(claimed.map((job) => runClaimedJob(sql, job, now, deps)));
+      ran += outcomes.filter(Boolean).length;
+    } finally {
+      for (const job of claimed) {
+        if (!job.lostLock) {
+          await releaseJobLock(sql, job.id, job.lockToken);
+        }
       }
     }
-  } finally {
-    for (const job of claimed) {
-      if (!job.lostLock) {
-        await releaseJobLock(sql, job.id, job.lockToken);
-      }
+    if (claimed.length < concurrency) {
+      break;
     }
   }
 

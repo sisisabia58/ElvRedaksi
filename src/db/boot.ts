@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hashPassword } from "../auth/password";
+import { normalizeCategories } from "../domain/tags";
 import { enqueue, type JobName } from "../jobs/runner";
 import type { Sql } from "./client";
 import { seedDefaults } from "./seed";
@@ -68,9 +69,35 @@ async function enqueueIfUnfinished(sql: Sql, name: JobName): Promise<void> {
   });
 }
 
+function asTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((tag): tag is string => typeof tag === "string");
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+async function normalizeStoredTags(sql: Sql): Promise<void> {
+  const rows = await sql.rows<{ id: string; tags: unknown }>("select id, tags from topics");
+  for (const row of rows) {
+    const tags = asTags(row.tags);
+    const next = normalizeCategories(tags);
+    if (JSON.stringify(tags) === JSON.stringify(next)) continue;
+    await sql.rows("update topics set tags = $1::jsonb where id = $2", [JSON.stringify(next), row.id]);
+  }
+}
+
 export async function boot(sql: Sql): Promise<void> {
   await applyDdl(sql);
   await seedDefaults(sql);
+  await normalizeStoredTags(sql);
   await seedDemoAdmin(sql);
   for (const name of BOOT_JOBS) {
     await enqueueIfUnfinished(sql, name);

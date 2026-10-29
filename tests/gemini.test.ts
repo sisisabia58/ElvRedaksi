@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  GEMINI_DEFAULT_MODEL,
-  GeminiLlm,
-  createLlm,
-  llmBanner,
-} from "../src/llm/provider";
+import { GEMINI_DEFAULT_MODEL, GeminiLlm, createLlm, llmBanner } from "../src/llm/provider";
 
 const ENV_KEYS = [
   "LLM_PROVIDER",
@@ -95,19 +90,36 @@ describe("gemini provider", () => {
     expect(body.generationConfig.responseSchema.properties.aspects).toBeTruthy();
   });
 
-  it("uses GEMINI_MODEL and treats a rate limit like any other HTTP error", async () => {
+  it("uses GEMINI_MODEL and turns a rate limit into a backoff error", async () => {
     setEnv("GEMINI_API_KEY", "test-key");
     setEnv("GEMINI_MODEL", "gemini-2.5-flash");
     const seen: string[] = [];
     const llm = new GeminiLlm(async (url) => {
       seen.push(url);
-      return { ok: false, status: 429, json: async () => ({}) };
+      return {
+        ok: false,
+        status: 429,
+        headers: { get: (name) => (name.toLowerCase() === "retry-after" ? "7" : null) },
+        json: async () => ({}),
+      };
     });
     await expect(
       llm.complete({ purpose: "copy", system: "sistem", user: "cuplikan" }),
-    ).rejects.toThrow("Gemini 429");
+    ).rejects.toMatchObject({ name: "LlmRateLimitError", retryAfterMs: 7_000 });
     expect(seen[0]).toContain("/models/gemini-2.5-flash:generateContent");
     expect(seen[0]).not.toContain("test-key");
+  });
+
+  it("backs off when Gemini times out", async () => {
+    setEnv("GEMINI_API_KEY", "test-key");
+    const llm = new GeminiLlm(async () => {
+      const error = new Error("The operation was aborted due to timeout");
+      error.name = "TimeoutError";
+      throw error;
+    });
+    await expect(
+      llm.complete({ purpose: "score", system: "sistem", user: "cuplikan" }),
+    ).rejects.toMatchObject({ message: "Gemini timeout", retryAfterMs: 20_000 });
   });
 
   it("refuses to call Gemini without a key and records zero cost when usage is missing", async () => {

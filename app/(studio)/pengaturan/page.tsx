@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { llmBanner } from "@/src/llm/provider";
-import { countDemoReviewDrafts } from "@/src/studio/regenerate-demo";
+import { countDemoReviewDrafts, regenerateProgress } from "@/src/studio/regenerate-demo";
 import { getSettings } from "@/src/studio/settings";
 import { PengaturanForm } from "./pengaturan-form";
 
@@ -18,7 +18,10 @@ export default async function PengaturanPage() {
 
   const settings = await getSettings(sql);
   const showMetaBanner = (process.env.META_PROVIDER ?? "fake") !== "meta";
-  const demoReviewCount = await countDemoReviewDrafts(sql);
+  const [demoReviewCount, progress] = await Promise.all([
+    countDemoReviewDrafts(sql),
+    regenerateProgress(sql),
+  ]);
 
   return (
     <PengaturanForm
@@ -26,6 +29,7 @@ export default async function PengaturanPage() {
       showMetaBanner={showMetaBanner}
       llmBanner={llmBanner().text}
       demoReviewCount={demoReviewCount}
+      regenerateProgress={progress}
     />
   );
 }
