@@ -16,6 +16,8 @@ export type JobCtx = {
   payload: Record<string, unknown>;
   manual: boolean;
   now: Date;
+  attempts?: number;
+  reclaimed?: boolean;
 };
 
 export type JobDeps = {
@@ -37,7 +39,11 @@ type ClaimedJob = {
   payload: Record<string, unknown>;
   manual: boolean;
   attempts: number;
+  reclaimed: boolean;
 };
+
+const PUBLISHER_LOCK_STALE_MS = 60_000;
+const DEFAULT_LOCK_STALE_MS = 10 * 60_000;
 
 function calendarParts(date: Date, timeZone: string) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
@@ -114,6 +120,8 @@ export async function enqueue(
 }
 
 async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
+  const publishStaleBefore = new Date(now.getTime() - PUBLISHER_LOCK_STALE_MS);
+  const otherStaleBefore = new Date(now.getTime() - DEFAULT_LOCK_STALE_MS);
   return sql.tx(async (tx) => {
     const rows = await tx.rows<{
       id: string;
@@ -121,14 +129,21 @@ async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
       payload: Record<string, unknown> | string;
       manual: boolean;
       attempts: number;
+      locked_at: Date | string | null;
     }>(
-      `select id, name, payload, manual, attempts
+      `select id, name, payload, manual, attempts, locked_at
        from jobs
-       where run_at <= $1 and finished_at is null and locked_at is null
+       where run_at <= $1
+         and finished_at is null
+         and (
+           locked_at is null
+           or (name = 'publisher.publish' and locked_at < $2)
+           or (name <> 'publisher.publish' and locked_at < $3)
+         )
        order by run_at
        limit 5
        for update skip locked`,
-      [now],
+      [now, publishStaleBefore, otherStaleBefore],
     );
     for (const row of rows) {
       await tx.rows(`update jobs set locked_at = $1 where id = $2`, [now, row.id]);
@@ -139,6 +154,7 @@ async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
       payload: parsePayload(row.payload),
       manual: row.manual,
       attempts: row.attempts,
+      reclaimed: row.locked_at != null,
     }));
   });
 }
@@ -167,7 +183,14 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
       return false;
     }
 
-    const ctx: JobCtx = { sql, payload: job.payload, manual: job.manual, now };
+    const ctx: JobCtx = {
+      sql,
+      payload: job.payload,
+      manual: job.manual,
+      now,
+      attempts: job.attempts,
+      reclaimed: job.reclaimed,
+    };
     try {
       await deps.handlers[job.name](ctx);
       try {

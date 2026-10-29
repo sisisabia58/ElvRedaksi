@@ -12,7 +12,7 @@ describe("bio", () => {
       "11111111-1111-1111-1111-111111111111", "Contoh", "https://news.example/feed", "ID",
     ]);
     await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1", "11111111-1111-1111-1111-111111111111", "Iklan", "https://news.example/artikel",
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1", "11111111-1111-1111-1111-111111111111", "Iklan", "https://example.com/artikel",
     ]);
     await sql.rows(
       `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, posted_at)
@@ -27,11 +27,36 @@ describe("bio", () => {
     expect(grid.items[0]).toMatchObject({ code: "abcde", sourceName: "Contoh" });
     const prefetch = await resolveShortLink(sql, "abcde", true);
     const real = await resolveShortLink(sql, "abcde", false);
-    expect(prefetch).toMatchObject({ location: "https://news.example/artikel", counted: false });
+    expect(prefetch).toMatchObject({ location: "https://example.com/artikel", counted: false });
     expect(real).toMatchObject({ counted: true });
     const clicks = await sql.rows<{ click_count: number }>("select click_count from drafts");
     expect(clicks[0].click_count).toBe(1);
     expect(await resolveShortLink(sql, "tidak", false)).toBeNull();
+  });
+
+  it("does not redirect a short link whose article url is private", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+      "11111111-1111-1111-1111-111111111111",
+      "Rahasia",
+      "http://127.0.0.1/secret",
+    ]);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, click_count)
+       values ($1,$2,'posted','teaser_bio','serif','[]'::jsonb,'c','[]'::jsonb,'[]'::jsonb,'priv8',0)`,
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2"],
+    );
+    expect(await resolveShortLink(sql, "priv8", false)).toBeNull();
+    const clicks = await sql.rows<{ click_count: number }>("select click_count from drafts where short_code = 'priv8'");
+    expect(clicks[0]?.click_count).toBe(0);
   });
 
   it("marks an agent running when its job is locked", async () => {

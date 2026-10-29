@@ -6,7 +6,7 @@ import { seedDefaults } from "../src/db/seed";
 import { addSource, deleteSource, listSources } from "../src/studio/sources";
 import { jobHandlers, runScout } from "../src/jobs/handlers";
 import { enqueue, runDueJobs } from "../src/jobs/runner";
-import { isBlockedFetchTarget, createPinnedLookup } from "../src/rss/fetch-guard";
+import { isBlockedFetchTarget, createPinnedLookup, PRIVATE_FETCH_MESSAGE } from "../src/rss/fetch-guard";
 
 const xml = `<?xml version="1.0"?><rss><channel>
   <item><title>Alat iklan baru</title><link>https://news.example/a</link>
@@ -223,5 +223,32 @@ describe("scout", () => {
     expect(sources).toHaveLength(0);
     expect(topics).toHaveLength(0);
     expect(drafts).toHaveLength(0);
+  });
+
+  it("does not insert a topic when the article fetch hits a private target", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await addSource(sql, "admin", { name: "Contoh", url: "https://news.example/feed", lang: "ID" });
+    const feed = `<?xml version="1.0"?><rss><channel>
+      <item><title>Rahasia</title><link>http://127.0.0.1/secret</link><description>Lokal.</description></item>
+      <item><title>Publik</title><link>https://news.example/public</link><description>Luar.</description></item>
+    </channel></rss>`;
+    await runScout({
+      sql,
+      payload: {},
+      manual: true,
+      now: new Date("2026-10-28T01:00:00Z"),
+      fetchFeed: async () => feed,
+      fetchPage: async (url) => {
+        if (url.includes("127.0.0.1")) {
+          throw new Error(PRIVATE_FETCH_MESSAGE);
+        }
+        throw new Error("halaman gagal");
+      },
+    });
+    const topics = await sql.rows<{ title: string; excerpt: string; url: string }>(
+      "select title, excerpt, url from topics order by title",
+    );
+    expect(topics).toEqual([{ title: "Publik", excerpt: "", url: "https://news.example/public" }]);
   });
 });

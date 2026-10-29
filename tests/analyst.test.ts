@@ -109,4 +109,60 @@ describe("analyst", () => {
     );
     expect(log.map((row) => row.message)).toEqual(['Gagal menilai "Rusak"']);
   });
+
+  it("enqueues one copy job for two passes and leaves a drafted topic drafted", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const source = "33333333-3333-3333-3333-333333333333";
+    const topicId = "cccccccc-cccc-cccc-cccc-ccccccccccc1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      source,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, summary) values ($1,$2,$3,$4,$5)",
+      [topicId, source, "Biasa", "https://news.example/once", "cuplikan"],
+    );
+    const llm = new DemoLlm();
+    const now = new Date("2026-10-28T02:00:00Z");
+    await runAnalyst({ sql, payload: { topicId }, manual: true, now, llm });
+    await runAnalyst({ sql, payload: { topicId }, manual: true, now, llm });
+    const queued = await sql.rows("select id from jobs where name = 'copywriter.write'");
+    expect(queued).toHaveLength(1);
+    await sql.rows("update topics set state = 'drafted' where id = $1", [topicId]);
+    await runAnalyst({ sql, payload: { topicId }, manual: true, now, llm });
+    const topic = await sql.rows<{ state: string }>("select state from topics where id = $1", [topicId]);
+    expect(topic[0]?.state).toBe("drafted");
+    const stillOne = await sql.rows("select id from jobs where name = 'copywriter.write'");
+    expect(stillOne).toHaveLength(1);
+  });
+
+  it("does not enqueue another copy job when one for that topic is unfinished", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const source = "44444444-4444-4444-4444-444444444444";
+    const topicId = "dddddddd-dddd-dddd-dddd-ddddddddddd1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      source,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, summary) values ($1,$2,$3,$4,$5)",
+      [topicId, source, "Biasa", "https://news.example/pending", "cuplikan"],
+    );
+    const now = new Date("2026-10-28T02:00:00Z");
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, manual) values ($1, 'copywriter.write', $2::jsonb, $3, false)`,
+      ["eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1", JSON.stringify({ topicId }), now],
+    );
+    await runAnalyst({ sql, payload: { topicId }, manual: true, now, llm: new DemoLlm() });
+    const queued = await sql.rows("select id from jobs where name = 'copywriter.write' and finished_at is null");
+    expect(queued).toHaveLength(1);
+    const topic = await sql.rows<{ state: string }>("select state from topics where id = $1", [topicId]);
+    expect(topic[0]?.state).toBe("passed");
+  });
 });

@@ -330,4 +330,33 @@ describe("copywriter", () => {
     expect(slides[0].headline).not.toBe("Judul lama yang cukup");
     expect(slides.some((slide) => slide.role !== "cover" && slide.photoDataUrl)).toBe(false);
   });
+
+  it("does not insert a second draft when a non-rewrite job runs again", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    const topicId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows(
+      "insert into topics (id, source_id, title, url, state, score) values ($1,$2,$3,$4,'passed',80)",
+      [topicId, "11111111-1111-1111-1111-111111111111", "Iklan baru", "https://news.example/a"],
+    );
+    const ctx = {
+      sql,
+      payload: { topicId },
+      manual: true,
+      now: new Date("2026-10-28T02:00:00Z"),
+      llm: new DemoLlm(),
+    };
+    await runCopywriter(ctx);
+    await runCopywriter(ctx);
+    const drafts = await sql.rows<{ id: string }>("select id from drafts where topic_id = $1", [topicId]);
+    expect(drafts).toHaveLength(1);
+    const topic = await sql.rows<{ state: string }>("select state from topics where id = $1", [topicId]);
+    expect(topic[0]?.state).toBe("drafted");
+  });
 });

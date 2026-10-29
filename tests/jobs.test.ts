@@ -123,4 +123,89 @@ describe("jobs", () => {
     const locked = await sql.rows<{ id: string }>("select id from jobs where locked_at is not null");
     expect(locked).toHaveLength(0);
   });
+
+  it("claims a lock older than the threshold and leaves a lock set to now", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-28T10:00:00Z");
+    const seen: { id: string; reclaimed: boolean; attempts: number }[] = [];
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      handlers: {
+        ...noopHandlers,
+        "publisher.publish": async (ctx) => {
+          seen.push({
+            id: String(ctx.payload.id),
+            reclaimed: ctx.reclaimed === true,
+            attempts: ctx.attempts ?? -1,
+          });
+        },
+        "insights.sync": async (ctx) => {
+          seen.push({
+            id: String(ctx.payload.id),
+            reclaimed: ctx.reclaimed === true,
+            attempts: ctx.attempts ?? -1,
+          });
+        },
+      },
+    };
+
+    async function job(
+      id: string,
+      name: "publisher.publish" | "insights.sync",
+      lockedAt: Date | null,
+      finishedAt: Date | null,
+    ) {
+      await sql.rows(
+        `insert into jobs (id, name, payload, run_at, locked_at, finished_at, attempts)
+         values ($1, $2, $3::jsonb, $4, $5, $6, 0)`,
+        [id, name, JSON.stringify({ id }), now, lockedAt, finishedAt],
+      );
+    }
+
+    await job("11111111-1111-1111-1111-111111111111", "publisher.publish", new Date(now.getTime() - 61_000), null);
+    await job("22222222-2222-2222-2222-222222222222", "publisher.publish", now, null);
+    await job("33333333-3333-3333-3333-333333333333", "publisher.publish", new Date(now.getTime() - 59_000), null);
+    await job("44444444-4444-4444-4444-444444444444", "insights.sync", new Date(now.getTime() - 61_000), null);
+    await job("55555555-5555-5555-5555-555555555555", "insights.sync", new Date(now.getTime() - 11 * 60_000), null);
+    await job("66666666-6666-6666-6666-666666666666", "insights.sync", null, null);
+    await job(
+      "77777777-7777-7777-7777-777777777777",
+      "publisher.publish",
+      new Date(now.getTime() - 120_000),
+      now,
+    );
+
+    const ran = await runDueJobs(sql, now, deps);
+    expect(ran).toBe(3);
+    expect(seen.map((row) => row.id).sort()).toEqual([
+      "11111111-1111-1111-1111-111111111111",
+      "55555555-5555-5555-5555-555555555555",
+      "66666666-6666-6666-6666-666666666666",
+    ]);
+    expect(seen.find((row) => row.id.startsWith("11111111"))).toMatchObject({ reclaimed: true, attempts: 0 });
+    expect(seen.find((row) => row.id.startsWith("55555555"))).toMatchObject({ reclaimed: true, attempts: 0 });
+    expect(seen.find((row) => row.id.startsWith("66666666"))).toMatchObject({ reclaimed: false, attempts: 0 });
+
+    const untouched = await sql.rows<{ id: string; finished_at: Date | null }>(
+      `select id, finished_at from jobs
+       where id in ($1, $2, $3, $4)
+       order by id`,
+      [
+        "22222222-2222-2222-2222-222222222222",
+        "33333333-3333-3333-3333-333333333333",
+        "44444444-4444-4444-4444-444444444444",
+        "77777777-7777-7777-7777-777777777777",
+      ],
+    );
+    expect(untouched.map((row) => row.id)).toEqual([
+      "22222222-2222-2222-2222-222222222222",
+      "33333333-3333-3333-3333-333333333333",
+      "44444444-4444-4444-4444-444444444444",
+      "77777777-7777-7777-7777-777777777777",
+    ]);
+    expect(untouched[0]?.finished_at).toBeNull();
+    expect(untouched[1]?.finished_at).toBeNull();
+    expect(untouched[2]?.finished_at).toBeNull();
+  });
 });

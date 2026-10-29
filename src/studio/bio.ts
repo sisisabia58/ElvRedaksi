@@ -1,4 +1,5 @@
 import type { Sql } from "../db/client";
+import { isBlockedFetchTarget } from "../rss/fetch-guard";
 
 export type BioItem = {
   code: string;
@@ -86,6 +87,7 @@ export async function resolveShortLink(
   );
   const location = rows[0]?.url;
   if (!location) return null;
+  if (await isBlockedFetchTarget(location)) return null;
   if (prefetch) return { location, counted: false };
   await sql.rows("update drafts set click_count = click_count + 1 where short_code = $1", [code]);
   return { location, counted: true };

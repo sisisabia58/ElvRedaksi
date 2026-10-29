@@ -17,7 +17,7 @@ import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from
 import { renderSlideHtml, safePhotoDataUrl, slidesForFormat, type SlideTemplate } from "../render/html";
 import { PlaywrightRasterizer, type Rasterizer } from "../render/raster";
 import { createLlm, type LlmProvider } from "../llm/provider";
-import { fetchPublicText } from "../rss/fetch-guard";
+import { fetchPublicText, PRIVATE_FETCH_MESSAGE } from "../rss/fetch-guard";
 import { excerptFromHtml } from "../rss/excerpt";
 import { parseFeed } from "../rss/parse";
 import { normalizeInsights, type DailyPoint } from "../studio/analytics";
@@ -63,7 +63,11 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
         try {
           const html = await ctx.fetchPage(item.url);
           excerpt = excerptFromHtml(html);
-        } catch {
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message === PRIVATE_FETCH_MESSAGE) {
+            continue;
+          }
           excerpt = "";
         }
 
@@ -171,16 +175,17 @@ async function scoreOneTopic(
     summary: string;
     excerpt: string;
     published_at: Date | null;
+    state: string;
     source_name: string;
   }>(
-    `select t.id, t.title, t.url, t.summary, t.excerpt, t.published_at, s.name as source_name
+    `select t.id, t.title, t.url, t.summary, t.excerpt, t.published_at, t.state, s.name as source_name
      from topics t
      join sources s on s.id = t.source_id
      where t.id = $1`,
     [topicId],
   );
   const topic = topics[0];
-  if (!topic) {
+  if (!topic || topic.state !== "new") {
     return { passed: false, valid: false };
   }
 
@@ -210,10 +215,13 @@ async function scoreOneTopic(
     scored = scoreTopic(result.text);
   } catch (error) {
     const message = error instanceof Error ? error.message : "skor tidak valid";
-    await ctx.sql.rows(
-      `update topics set state = 'failed', error = $1 where id = $2`,
+    const failed = await ctx.sql.rows<{ id: string }>(
+      `update topics set state = 'failed', error = $1 where id = $2 and state = 'new' returning id`,
       [message, topicId],
     );
+    if (failed.length === 0) {
+      return { passed: false, valid: false };
+    }
     await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
       randomUUID(),
       "analis",
@@ -228,42 +236,61 @@ async function scoreOneTopic(
   const passed = !blocked && verdict(score, threshold) === "lolos";
   const state = blocked || verdict(score, threshold) === "dilewati" ? "skipped" : "passed";
 
-  await ctx.sql.rows(
-    `update topics set
-       state = $1,
-       score = $2,
-       aspects = $3::jsonb,
-       tags = $4::jsonb,
-       sensitive = $5,
-       sensitive_reason = $6,
-       blocked = $7,
-       score_reason = $8,
-       scored_at = $9,
-       error = null
-     where id = $10`,
-    [
-      state,
-      score,
-      JSON.stringify(scored.aspects),
-      JSON.stringify(scored.tags),
-      scored.sensitive,
-      scored.sensitiveReason,
-      blocked,
-      scored.reason,
-      ctx.now,
-      topicId,
-    ],
-  );
+  const applied = await ctx.sql.tx(async (tx) => {
+    const updated = await tx.rows<{ id: string }>(
+      `update topics set
+         state = $1,
+         score = $2,
+         aspects = $3::jsonb,
+         tags = $4::jsonb,
+         sensitive = $5,
+         sensitive_reason = $6,
+         blocked = $7,
+         score_reason = $8,
+         scored_at = $9,
+         error = null
+       where id = $10 and state = 'new'
+       returning id`,
+      [
+        state,
+        score,
+        JSON.stringify(scored.aspects),
+        JSON.stringify(scored.tags),
+        scored.sensitive,
+        scored.sensitiveReason,
+        blocked,
+        scored.reason,
+        ctx.now,
+        topicId,
+      ],
+    );
+    if (updated.length === 0) {
+      return false;
+    }
+    if (passed) {
+      const pending = await tx.rows<{ id: string }>(
+        `select id from jobs
+         where name = 'copywriter.write'
+           and finished_at is null
+           and payload->>'topicId' = $1
+         limit 1`,
+        [topicId],
+      );
+      if (pending.length === 0) {
+        await enqueue(tx, {
+          name: "copywriter.write",
+          payload: { topicId },
+          runAt: ctx.now,
+          manual: false,
+        });
+      }
+    }
+    return true;
+  });
 
-  if (passed) {
-    await enqueue(ctx.sql, {
-      name: "copywriter.write",
-      payload: { topicId },
-      runAt: ctx.now,
-      manual: false,
-    });
+  if (!applied) {
+    return { passed: false, valid: false };
   }
-
   return { passed, valid: true };
 }
 
@@ -402,6 +429,15 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   if (rewrite && (await topicDraftIsPosting(ctx.sql, topicId))) {
     return;
   }
+  if (!rewrite) {
+    const already = await ctx.sql.rows<{ id: string }>(
+      "select id from drafts where topic_id = $1 limit 1",
+      [topicId],
+    );
+    if (already[0]) {
+      return;
+    }
+  }
 
   const brain = await loadBrain(ctx.sql);
   const user = [
@@ -502,24 +538,45 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
     const id = randomUUID();
     const shortCode = makeShortCode(randomBytes(5));
     try {
-      await ctx.sql.rows(
-        `insert into drafts (
-           id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, focal_y, short_code, manual
-         ) values ($1, $2, 'drafted', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, 50, $9, $10)`,
-        [
-          id,
-          topicId,
-          brand.format,
-          brand.template,
-          slidesJson,
-          copy.caption,
-          JSON.stringify(copy.hashtags),
-          JSON.stringify(copy.altHeadlines),
-          shortCode,
-          ctx.manual,
-        ],
-      );
-      draftId = id;
+      const inserted = await ctx.sql.tx(async (tx) => {
+        await tx.rows(`select id from topics where id = $1 for update`, [topicId]);
+        const existing = await tx.rows<{ id: string }>(
+          "select id from drafts where topic_id = $1 limit 1",
+          [topicId],
+        );
+        if (existing[0]) {
+          return null;
+        }
+        await tx.rows(
+          `insert into drafts (
+             id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, focal_y, short_code, manual
+           ) values ($1, $2, 'drafted', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, 50, $9, $10)`,
+          [
+            id,
+            topicId,
+            brand.format,
+            brand.template,
+            slidesJson,
+            copy.caption,
+            JSON.stringify(copy.hashtags),
+            JSON.stringify(copy.altHeadlines),
+            shortCode,
+            ctx.manual,
+          ],
+        );
+        await tx.rows(`update topics set state = 'drafted', error = null where id = $1`, [topicId]);
+        await enqueue(tx, {
+          name: "designer.render",
+          payload: { draftId: id },
+          runAt: ctx.now,
+          manual: ctx.manual,
+        });
+        return id;
+      });
+      if (inserted === null) {
+        return;
+      }
+      draftId = inserted;
       break;
     } catch (error) {
       if (isUniqueViolation(error) && attempt < 4) {
@@ -532,20 +589,12 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   if (!draftId) {
     throw new Error("gagal membuat short_code unik");
   }
-
-  await ctx.sql.rows(`update topics set state = 'drafted', error = null where id = $1`, [topicId]);
   const coverHeadline = copy.slides[0]?.headline ?? topic.title;
   await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
     randomUUID(),
     "copywriter",
     `Draft siap: "${coverHeadline}"`,
   ]);
-  await enqueue(ctx.sql, {
-    name: "designer.render",
-    payload: { draftId },
-    runAt: ctx.now,
-    manual: ctx.manual,
-  });
 }
 
 export type DesignerCtx = JobCtx & { rasterizer?: Rasterizer };
@@ -792,6 +841,20 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
       storyMediaId: draft.story_media_id,
       storyError: draft.story_error,
     });
+    return;
+  }
+
+  if (
+    draft.status === "posting" &&
+    draft.ig_media_id == null &&
+    (ctx.reclaimed === true || (ctx.attempts ?? 0) > 0)
+  ) {
+    assertTransition("worker", "posting", "failed");
+    await ctx.sql.rows(
+      `update drafts set status = 'failed', error = $1, updated_at = $2
+       where id = $3 and status = 'posting'`,
+      ["Posting terputus sebelum id Instagram tersimpan", ctx.now, draftId],
+    );
     return;
   }
 

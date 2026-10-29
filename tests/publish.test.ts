@@ -148,4 +148,111 @@ describe("publisher", () => {
     expect(row[0].story_error).toBe("cerita gagal");
     expect(new Date(row[0].posted_at).toISOString()).toBe(now.toISOString());
   });
+
+  async function postingDraft(sql: Awaited<ReturnType<typeof createTestSql>>, id: string) {
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3",
+      "11111111-1111-1111-1111-111111111111",
+      "Iklan",
+      `https://news.example/${id}`,
+    ]);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
+       values ($1,$2,'posting','teaser_bio','serif',$3::jsonb,'Dari Contoh','[]'::jsonb,'[]'::jsonb,$4)`,
+      [
+        id,
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3",
+        JSON.stringify([
+          { role: "cover", kicker: "AI", headline: "Iklan baru bisa nyamar", body: "Pembuka." },
+          { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Ke Contoh." },
+        ]),
+        id.slice(0, 5),
+      ],
+    );
+  }
+
+  it("fails a retried posting draft that never stored an Instagram id", async () => {
+    const sql = await createTestSql();
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3";
+    await postingDraft(sql, draftId);
+    let publishCalls = 0;
+    await runPublisher({
+      sql,
+      payload: { draftId },
+      manual: false,
+      now: new Date("2026-10-28T02:00:00Z"),
+      attempts: 1,
+      reclaimed: false,
+      publisher: {
+        async publish() {
+          publishCalls += 1;
+          return { mediaId: "should-not", storyMediaId: null, storyError: null };
+        },
+      },
+    });
+    const row = await sql.rows<{ status: string; error: string | null; ig_media_id: string | null }>(
+      "select status, error, ig_media_id from drafts",
+    );
+    expect(publishCalls).toBe(0);
+    expect(row[0]).toMatchObject({
+      status: "failed",
+      error: "Posting terputus sebelum id Instagram tersimpan",
+      ig_media_id: null,
+    });
+  });
+
+  it("publishes a fresh posting draft that has no Instagram id yet", async () => {
+    const sql = await createTestSql();
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4";
+    await postingDraft(sql, draftId);
+    const publisher = new FakePublisher();
+    await runPublisher({
+      sql,
+      payload: { draftId },
+      manual: true,
+      now: new Date("2026-10-28T02:05:00Z"),
+      attempts: 0,
+      reclaimed: false,
+      publisher,
+    });
+    expect(publisher.calls).toHaveLength(1);
+    const row = await sql.rows<{ status: string; ig_media_id: string }>(
+      "select status, ig_media_id from drafts",
+    );
+    expect(row[0].status).toBe("posted");
+    expect(row[0].ig_media_id.startsWith("fake_")).toBe(true);
+  });
+
+  it("fails a reclaimed posting draft that never stored an Instagram id", async () => {
+    const sql = await createTestSql();
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb5";
+    await postingDraft(sql, draftId);
+    let publishCalls = 0;
+    await runPublisher({
+      sql,
+      payload: { draftId },
+      manual: false,
+      now: new Date("2026-10-28T02:00:00Z"),
+      attempts: 0,
+      reclaimed: true,
+      publisher: {
+        async publish() {
+          publishCalls += 1;
+          return { mediaId: "should-not", storyMediaId: null, storyError: null };
+        },
+      },
+    });
+    expect(publishCalls).toBe(0);
+    const row = await sql.rows<{ status: string; error: string | null }>("select status, error from drafts");
+    expect(row[0]).toMatchObject({
+      status: "failed",
+      error: "Posting terputus sebelum id Instagram tersimpan",
+    });
+  });
 });
