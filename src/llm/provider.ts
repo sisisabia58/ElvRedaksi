@@ -239,8 +239,8 @@ export class GeminiLlm implements LlmProvider {
       }
       throw error;
     }
-    if (res.status === 429) {
-      throw new LlmRateLimitError(retryAfterMs(res));
+    if (res.status === 429 || res.status === 503 || res.status === 504) {
+      throw new LlmRateLimitError(retryAfterMs(res), `Gemini ${res.status}`);
     }
     if (!res.ok) {
       throw new Error(`Gemini ${res.status}`);

@@ -314,6 +314,55 @@ describe("jobs", () => {
     expect(Number(open[0]?.count)).toBe(4);
   });
 
+  it("still reaches a newer scout and designer when dozens of older rewrites are due", async () => {
+    const sql = await createTestSql();
+    const now = new Date("2026-10-29T13:00:00Z");
+    const seen: string[] = [];
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      tickBudgetMs: 1_000,
+      concurrency: 4,
+      handlers: {
+        ...noopHandlers,
+        "scout.scan": async () => {
+          seen.push("scout");
+        },
+        "designer.render": async () => {
+          seen.push("designer");
+        },
+        "copywriter.write": async () => {
+          seen.push("rewrite");
+        },
+      },
+    };
+    for (let index = 0; index < 45; index += 1) {
+      await enqueue(sql, {
+        name: "copywriter.write",
+        payload: { regenerateDemo: true, topicId: `backlog-${index}` },
+        runAt: new Date(now.getTime() - 120_000),
+        manual: true,
+      });
+    }
+    await enqueue(sql, {
+      name: "designer.render",
+      payload: { draftId: "late-draft" },
+      runAt: now,
+      manual: true,
+    });
+    await enqueue(sql, {
+      name: "scout.scan",
+      payload: {},
+      runAt: now,
+      manual: true,
+    });
+    const ran = await runDueJobs(sql, now, deps);
+    expect(ran).toBe(4);
+    expect(seen).toContain("scout");
+    expect(seen).toContain("designer");
+    expect(seen.filter((name) => name === "rewrite")).toHaveLength(2);
+  });
+
   it("reschedules a Gemini 429 and finishes only after repeated limits", async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-29T13:00:00Z");

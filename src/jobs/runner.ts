@@ -198,18 +198,36 @@ async function claimDueJobs(sql: Sql, now: Date, concurrency: number): Promise<C
   const otherStaleBefore = new Date(now.getTime() - DEFAULT_LOCK_STALE_MS);
   return sql.tx(async (tx) => {
     const rows = await tx.rows<DueRow>(
-      `select id, name, payload, manual, attempts, locked_at, run_at
-       from jobs
-       where run_at <= $1
-         and finished_at is null
-         and (
-           locked_at is null
-           or (name = 'publisher.publish' and locked_at < $2)
-           or (name <> 'publisher.publish' and locked_at < $3)
-         )
-       order by run_at
-       limit 40
-       for update skip locked`,
+      `with due as (
+         select id, run_at,
+           case
+             when name = 'designer.render' then 'design'
+             when name = 'copywriter.write' and coalesce(payload->>'regenerateDemo', '') = 'true' then 'rewrite'
+             else 'normal'
+           end as lane
+         from jobs
+         where run_at <= $1
+           and finished_at is null
+           and (
+             locked_at is null
+             or (name = 'publisher.publish' and locked_at < $2)
+             or (name <> 'publisher.publish' and locked_at < $3)
+           )
+       ),
+       ranked as (
+         select id, lane, row_number() over (partition by lane order by run_at) as rn
+         from due
+       ),
+       picked as (
+         select id from ranked
+         where (lane = 'design' and rn <= 8)
+            or (lane = 'normal' and rn <= 8)
+            or (lane = 'rewrite' and rn <= 24)
+       )
+       select j.id, j.name, j.payload, j.manual, j.attempts, j.locked_at, j.run_at
+       from jobs j
+       join picked on picked.id = j.id
+       for update of j skip locked`,
       [now, publishStaleBefore, otherStaleBefore],
     );
     const picked = selectFairBatch(rows, concurrency);

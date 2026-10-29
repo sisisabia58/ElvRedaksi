@@ -110,6 +110,21 @@ describe("gemini provider", () => {
     expect(seen[0]).not.toContain("test-key");
   });
 
+  it("backs off when Gemini is unavailable", async () => {
+    setEnv("GEMINI_API_KEY", "test-key");
+    const llm = new GeminiLlm(async () => ({
+      ok: false,
+      status: 503,
+      headers: { get: () => null },
+      json: async () => ({}),
+    }));
+    await expect(llm.complete({ purpose: "copy", system: "", user: "" })).rejects.toMatchObject({
+      name: "LlmRateLimitError",
+      message: "Gemini 503",
+      retryAfterMs: 20_000,
+    });
+  });
+
   it("backs off when Gemini times out", async () => {
     setEnv("GEMINI_API_KEY", "test-key");
     const llm = new GeminiLlm(async () => {
