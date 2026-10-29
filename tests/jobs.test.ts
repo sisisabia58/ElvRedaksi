@@ -208,4 +208,54 @@ describe("jobs", () => {
     expect(untouched[1]?.finished_at).toBeNull();
     expect(untouched[2]?.finished_at).toBeNull();
   });
+
+  it("does not let a second claim take a refreshed lock or clear it with the old token", async () => {
+    const sql = await createTestSql();
+    const now = new Date(Date.now() - 120_000);
+    const jobId = "88888888-8888-4888-8888-888888888888";
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, attempts)
+       values ($1, 'publisher.publish', $2::jsonb, $3, 0)`,
+      [jobId, JSON.stringify({ id: jobId }), now],
+    );
+
+    const ownerLock = new Date(Date.now() + 5 * 60_000);
+    let calls = 0;
+    let lockAfterOldUnlock: Date | string | null = null;
+    let secondRan = -1;
+    const deps: JobDeps = {
+      workStart: "07:00",
+      workEnd: "22:00",
+      handlers: {
+        ...noopHandlers,
+        "publisher.publish": async () => {
+          calls += 1;
+          if (calls > 1) return;
+
+          await sql.rows(`update jobs set locked_at = null where id = $1 and locked_at = $2`, [jobId, now]);
+          const held = await sql.rows<{ locked_at: Date | string | null }>(
+            "select locked_at from jobs where id = $1",
+            [jobId],
+          );
+          lockAfterOldUnlock = held[0]?.locked_at ?? null;
+          secondRan = await runDueJobs(sql, new Date(), deps);
+          await sql.rows(`update jobs set locked_at = $1 where id = $2`, [ownerLock, jobId]);
+        },
+      },
+    };
+
+    const ran = await runDueJobs(sql, now, deps);
+    expect(calls).toBe(1);
+    expect(lockAfterOldUnlock).not.toBeNull();
+    expect(secondRan).toBe(0);
+    expect(ran).toBe(0);
+
+    const row = await sql.rows<{ locked_at: Date | string | null; finished_at: Date | string | null }>(
+      "select locked_at, finished_at from jobs where id = $1",
+      [jobId],
+    );
+    expect(row[0]?.finished_at).toBeNull();
+    const lockedAt = row[0]?.locked_at instanceof Date ? row[0].locked_at : new Date(String(row[0]?.locked_at));
+    expect(lockedAt.getTime()).toBe(ownerLock.getTime());
+  });
 });

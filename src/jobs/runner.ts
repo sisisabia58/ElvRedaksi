@@ -40,6 +40,8 @@ type ClaimedJob = {
   manual: boolean;
   attempts: number;
   reclaimed: boolean;
+  lockToken: Date;
+  lostLock: boolean;
 };
 
 const PUBLISHER_LOCK_STALE_MS = 60_000;
@@ -155,20 +157,40 @@ async function claimDueJobs(sql: Sql, now: Date): Promise<ClaimedJob[]> {
       manual: row.manual,
       attempts: row.attempts,
       reclaimed: row.locked_at != null,
+      lockToken: now,
+      lostLock: false,
     }));
   });
 }
 
-async function releaseJobLock(sql: Sql, jobId: string): Promise<void> {
+async function releaseJobLock(sql: Sql, jobId: string, token: Date): Promise<void> {
   try {
-    await sql.rows(`update jobs set locked_at = null where id = $1 and locked_at is not null`, [jobId]);
+    await sql.rows(`update jobs set locked_at = null where id = $1 and locked_at = $2`, [jobId, token]);
   } catch {
     // A bookkeeping failure on one job must not abort the rest of the batch.
   }
 }
 
+async function refreshJobLock(sql: Sql, job: ClaimedJob, start: Date): Promise<boolean> {
+  const refreshed = await sql.rows<{ id: string }>(
+    `update jobs set locked_at = $1 where id = $2 and locked_at = $3 returning id`,
+    [start, job.id, job.lockToken],
+  );
+  if (refreshed.length === 0) {
+    job.lostLock = true;
+    return false;
+  }
+  job.lockToken = start;
+  return true;
+}
+
 async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps): Promise<boolean> {
   try {
+    const start = new Date();
+    if (!(await refreshJobLock(sql, job, start))) {
+      return false;
+    }
+
     if (
       WORK_HOUR_GATED.has(job.name) &&
       !job.manual &&
@@ -176,7 +198,10 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
     ) {
       try {
         const runAt = nextWorkStart(now, deps.workStart);
-        await sql.rows(`update jobs set locked_at = null, run_at = $1 where id = $2`, [runAt, job.id]);
+        await sql.rows(
+          `update jobs set locked_at = null, run_at = $1 where id = $2 and locked_at = $3`,
+          [runAt, job.id, job.lockToken],
+        );
       } catch {
         // defer bookkeeping failure; lock cleared in finally
       }
@@ -194,8 +219,11 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
     try {
       await deps.handlers[job.name](ctx);
       try {
-        await sql.rows(`update jobs set finished_at = $1, locked_at = null where id = $2`, [now, job.id]);
-        return true;
+        const finished = await sql.rows<{ id: string }>(
+          `update jobs set finished_at = $1, locked_at = null where id = $2 and locked_at = $3 returning id`,
+          [now, job.id, job.lockToken],
+        );
+        return finished.length > 0;
       } catch {
         return false;
       }
@@ -206,13 +234,13 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
         if (attempts < 3) {
           const retryAt = new Date(now.getTime() + 5 * 60_000);
           await sql.rows(
-            `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4`,
-            [attempts, message, retryAt, job.id],
+            `update jobs set attempts = $1, error = $2, locked_at = null, run_at = $3 where id = $4 and locked_at = $5`,
+            [attempts, message, retryAt, job.id, job.lockToken],
           );
         } else {
           await sql.rows(
-            `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4`,
-            [attempts, message, now, job.id],
+            `update jobs set attempts = $1, error = $2, locked_at = null, finished_at = $3 where id = $4 and locked_at = $5`,
+            [attempts, message, now, job.id, job.lockToken],
           );
         }
       } catch {
@@ -221,7 +249,9 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
       return false;
     }
   } finally {
-    await releaseJobLock(sql, job.id);
+    if (!job.lostLock) {
+      await releaseJobLock(sql, job.id, job.lockToken);
+    }
   }
 }
 
@@ -237,7 +267,9 @@ export async function runDueJobs(sql: Sql, now: Date, deps: JobDeps): Promise<nu
     }
   } finally {
     for (const job of claimed) {
-      await releaseJobLock(sql, job.id);
+      if (!job.lostLock) {
+        await releaseJobLock(sql, job.id, job.lockToken);
+      }
     }
   }
 
