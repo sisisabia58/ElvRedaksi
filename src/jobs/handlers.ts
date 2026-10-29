@@ -840,7 +840,9 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
     try {
       for (let index = 0; index < selected.length; index++) {
         const slide = selected[index];
-        let { photoDataUrl, focalY } = photoInputForSlide(slide, draft.focal_y);
+        const shot = photoInputForSlide(slide, draft.focal_y);
+        const focalY = shot.focalY;
+        let photoDataUrl = shot.photoDataUrl;
         if (template === "berita_pro" && slide.role === "cover" && !photoDataUrl && draft.image_url) {
           photoDataUrl = safePhotoDataUrl(await cachedImageDataUrl(ctx.sql, draft.image_url));
         }

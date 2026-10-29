@@ -118,7 +118,10 @@ export function EditorPanel({
   const [seenUpdatedAt, setSeenUpdatedAt] = useState(draft.updatedAt);
   const slideTotal = draft.slideCount;
   const clampedIndex = Math.min(slideIndex, Math.max(slideTotal - 1, 0));
-  const slideOptions = { template, slideCount: draft.slideCount };
+  const slideOptions = useMemo(
+    () => ({ template, slideCount: draft.slideCount }),
+    [template, draft.slideCount],
+  );
   if (draft.updatedAt !== seenUpdatedAt) {
     const next = editorTextFields(draft, clampedIndex);
     const adopted = adoptServerDraft(

@@ -1,5 +1,6 @@
 import type { Slide } from "../agents/copywriter";
-import { slidesForFormat, type SlideFormatOptions, type SlideTemplate } from "../render/html";
+import type { SlideTemplateName } from "../domain/brand";
+import { slidesForFormat, type SlideFormatOptions } from "../render/pick";
 
 export type DraftFormat = "carousel_full" | "teaser_bio";
 
@@ -91,7 +92,7 @@ export function editorTextFields(
   draft: {
     slides: Slide[];
     format: DraftFormat;
-    template?: SlideTemplate;
+    template?: SlideTemplateName;
     slideCount?: number;
     caption: string;
     hashtags: string[];
@@ -148,7 +149,7 @@ export function adoptServerDraft(
   previous: EditorTextFields,
   local: EditorTextFields,
   next: EditorTextFields,
-  preview: { format: DraftFormat; index: number; template?: SlideTemplate; slideCount?: number } = {
+  preview: { format: DraftFormat; index: number; template?: SlideTemplateName; slideCount?: number } = {
     format: "carousel_full",
     index: 0,
   },

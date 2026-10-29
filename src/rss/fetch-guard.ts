@@ -390,13 +390,6 @@ async function readResponseBytesLimited(
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
 }
 
-async function readResponseTextLimited(
-  response: Awaited<ReturnType<typeof undiciFetch>>,
-  maxBytes: number,
-): Promise<string> {
-  return Buffer.from(await readResponseBytesLimited(response, maxBytes)).toString("utf8");
-}
-
 async function fetchPinnedUrl(
   url: string,
   signal: AbortSignal,

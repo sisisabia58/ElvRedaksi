@@ -1,7 +1,10 @@
 import type { Slide } from "../agents/copywriter";
-import { clampSlideCount, type SlideTemplateName } from "../domain/brand";
+import { type SlideTemplateName } from "../domain/brand";
 import { SLIDE_HEIGHT, SLIDE_WIDTH } from "../domain/constants";
 import { renderBeritaProHtml } from "./berita-pro";
+
+export type { SlideFormatOptions } from "./pick";
+export { slidesForFormat } from "./pick";
 
 export type SlideTemplate = SlideTemplateName;
 
@@ -17,11 +20,6 @@ export type RenderSlideInput = {
   photoDataUrl: string | null;
   logoDataUrl?: string | null;
   initial?: string;
-};
-
-export type SlideFormatOptions = {
-  template?: SlideTemplate;
-  slideCount?: number;
 };
 
 const PALETTE = ["#14171c", "#f6ee5f", "#ffffff"] as const;
@@ -183,39 +181,4 @@ export function renderSlideHtml(input: RenderSlideInput): string {
     default:
       return renderSerif(input);
   }
-}
-
-export function slidesForFormat(
-  format: "carousel_full" | "teaser_bio",
-  slides: Slide[],
-  options?: SlideFormatOptions,
-): Slide[] {
-  const cover = slides.find((s) => s.role === "cover");
-  if (!cover) {
-    throw new Error("slide tidak lengkap");
-  }
-  const picked =
-    options?.template === "berita_pro"
-      ? (() => {
-          const points = slides
-            .filter((slide) => slide.role === "point")
-            .slice(0, clampSlideCount(options.slideCount) - 1);
-          if (points.length === 0) {
-            throw new Error("slide tidak lengkap");
-          }
-          return [cover, ...points];
-        })()
-      : format === "teaser_bio"
-        ? (() => {
-            const cta = slides.find((s) => s.role === "cta");
-            if (!cta) {
-              throw new Error("slide tidak lengkap");
-            }
-            return [cover, cta];
-          })()
-        : [cover, ...slides.filter((s) => s.role === "point")];
-  if (picked.length < 2 || picked.length > 10) {
-    throw new Error("jumlah slide tidak valid");
-  }
-  return picked;
 }
