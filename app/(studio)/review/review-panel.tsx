@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { reviewActionVisible, type DraftStatus } from "@/src/domain/status";
+import { RegenerateDemoButton } from "@/components/studio/regenerate-demo-button";
 import { bulkApproveAction, bulkRejectAction, bulkScheduleAction } from "./actions";
 
 export type ReviewCardView = {
@@ -37,12 +38,16 @@ export function ReviewPanel({
   counts,
   canPublish,
   canWrite,
+  isAdmin,
+  demoReviewCount,
 }: {
   cards: ReviewCardView[];
   status: DraftStatus;
   counts: Partial<Record<DraftStatus, number>>;
   canPublish: boolean;
   canWrite: boolean;
+  isAdmin: boolean;
+  demoReviewCount: number;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -92,6 +97,9 @@ export function ReviewPanel({
           Cek fakta, edit kalau perlu, lalu setujui dan jadwalkan. Tidak ada yang terposting tanpa persetujuan
           tim.
         </p>
+        {isAdmin && status === "needs_review" ? (
+          <RegenerateDemoButton count={demoReviewCount} />
+        ) : null}
       </div>
 
       <div className="flex flex-wrap gap-2">

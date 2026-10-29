@@ -392,6 +392,138 @@ async function topicDraftIsPosting(sql: JobCtx["sql"], topicId: string): Promise
   return rows.length > 0;
 }
 
+async function draftStatusForTopic(
+  sql: JobCtx["sql"],
+  topicId: string,
+): Promise<{ id: string; status: string; slides: unknown } | null> {
+  const rows = await sql.rows<{ id: string; status: string; slides: unknown }>(
+    "select id, status, slides from drafts where topic_id = $1 limit 1",
+    [topicId],
+  );
+  return rows[0] ?? null;
+}
+
+async function rewriteDemoReviewDraft(
+  ctx: CopywriterCtx,
+  llm: LlmProvider,
+  topic: {
+    id: string;
+    title: string;
+    url: string;
+    summary: string;
+    excerpt: string;
+    published_at: Date | null;
+    source_name: string;
+  },
+): Promise<void> {
+  const existing = await draftStatusForTopic(ctx.sql, topic.id);
+  if (!existing || existing.status !== "needs_review") {
+    return;
+  }
+
+  const brain = await loadBrain(ctx.sql);
+  const user = [
+    `Judul: ${topic.title}`,
+    `URL: ${topic.url}`,
+    `Sumber: ${topic.source_name}`,
+    `Diterbitkan: ${formatPublished(topic.published_at)}`,
+    `Ringkasan: ${topic.summary}`,
+    `Cuplikan: ${topic.excerpt}`,
+  ].join("\n");
+
+  const scoredResult = await llm.complete({
+    purpose: "score",
+    system: analystSystem(brain),
+    user,
+  });
+  await ctx.sql.rows(
+    `insert into llm_spend (id, agent, model, cost_usd) values ($1, $2, $3, $4)`,
+    [randomUUID(), "analis", scoredResult.model, scoredResult.costUsd],
+  );
+  const scored = scoreTopic(scoredResult.text);
+  const score = totalScore(scored.aspects);
+  const scoredRows = await ctx.sql.rows<{ id: string }>(
+    `update topics set
+       score = $1,
+       aspects = $2::jsonb,
+       tags = $3::jsonb,
+       sensitive = $4,
+       sensitive_reason = $5,
+       blocked = $6,
+       score_reason = $7,
+       scored_at = $8,
+       error = null
+     where id = $9 and state = 'drafted'
+     returning id`,
+    [
+      score,
+      JSON.stringify(scored.aspects),
+      JSON.stringify(scored.tags),
+      scored.sensitive,
+      scored.sensitiveReason,
+      scored.blocked,
+      scored.reason,
+      ctx.now,
+      topic.id,
+    ],
+  );
+  if (scoredRows.length === 0) {
+    return;
+  }
+
+  const stillReview = await draftStatusForTopic(ctx.sql, topic.id);
+  if (!stillReview || stillReview.status !== "needs_review") {
+    return;
+  }
+
+  const copyResult = await llm.complete({
+    purpose: "copy",
+    system: copySystem(brain),
+    user,
+  });
+  await ctx.sql.rows(
+    `insert into llm_spend (id, agent, model, cost_usd) values ($1, $2, $3, $4)`,
+    [randomUUID(), "copywriter", copyResult.model, copyResult.costUsd],
+  );
+  const copy = parseCopy(copyResult.text, topic.source_name);
+  const slides = slidesKeepingCoverPhoto(copy.slides, stillReview.slides);
+  const updated = await ctx.sql.rows<{ id: string }>(
+    `update drafts set
+       slides = $1::jsonb,
+       caption = $2,
+       hashtags = $3::jsonb,
+       alt_headlines = $4::jsonb,
+       text_dirty = true,
+       status = 'needs_review',
+       updated_at = $5
+     where id = $6 and status = 'needs_review'
+     returning id`,
+    [
+      JSON.stringify(slides),
+      copy.caption,
+      JSON.stringify(copy.hashtags),
+      JSON.stringify(copy.altHeadlines),
+      ctx.now,
+      stillReview.id,
+    ],
+  );
+  if (updated.length === 0) {
+    return;
+  }
+  const coverHeadline = copy.slides[0]?.headline ?? topic.title;
+  await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
+    randomUUID(),
+    "copywriter",
+    `Naskah demo ditulis ulang: "${coverHeadline}"`,
+  ]);
+  await enqueue(ctx.sql, {
+    name: "designer.render",
+    payload: { draftId: stillReview.id },
+    runAt: ctx.now,
+    manual: true,
+  });
+}
+
 export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   const llm = ctx.llm ?? createLlm();
   const topicId = ctx.payload.topicId;
@@ -418,6 +550,11 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   const topic = topics[0];
   if (!topic) {
     throw new Error("topik tidak ditemukan");
+  }
+
+  if (ctx.payload.regenerateDemo === true) {
+    await rewriteDemoReviewDraft(ctx, llm, topic);
+    return;
   }
 
   const force = ctx.payload.force === true;

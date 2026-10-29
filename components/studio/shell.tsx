@@ -2,6 +2,7 @@ import { getAppSql } from "@/src/auth/app-sql";
 import type { Role } from "@/src/auth/rbac";
 import { formatUsd } from "@/src/domain/metrics";
 import { navItems } from "@/src/studio/nav";
+import { llmBanner } from "@/src/llm/provider";
 import { spendSummary } from "@/src/studio/spend";
 import { logout } from "@/app/(studio)/actions";
 import { StudioNavLinks } from "@/components/studio/nav-links";
@@ -37,7 +38,7 @@ export default async function Shell({
   const brandRows = await sql.rows<{ handle: string }>("select handle from brand where id = 1");
   const handle = brandRows[0]?.handle ?? "redaksi";
   const spend = await spendSummary(sql, new Date());
-  const demoAi = (process.env.LLM_PROVIDER ?? "demo") !== "openai";
+  const demoAi = llmBanner().provider === "demo";
   const todayUsd = demoAi ? 0 : spend.today;
   const monthUsd = demoAi ? 0 : spend.month;
   const spendNote = demoAi ? " (simulasi)" : "";

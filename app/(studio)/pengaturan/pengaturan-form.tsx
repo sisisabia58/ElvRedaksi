@@ -9,6 +9,7 @@ import {
   saveInstagramConnectAction,
   saveSettingsAction,
 } from "./actions";
+import { RegenerateDemoButton } from "@/components/studio/regenerate-demo-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,11 +36,13 @@ function brandFromSettings(settings: Settings): SettingsInput {
 export function PengaturanForm({
   settings,
   showMetaBanner,
-  showLlmBanner,
+  llmBanner,
+  demoReviewCount,
 }: {
   settings: Settings;
   showMetaBanner: boolean;
-  showLlmBanner: boolean;
+  llmBanner: string;
+  demoReviewCount: number;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -120,11 +123,10 @@ export function PengaturanForm({
           Mode latihan: posting tidak dikirim ke Instagram.
         </p>
       ) : null}
-      {showLlmBanner ? (
-        <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
-          AI demo: skor dan naskah dibuat lokal, tanpa biaya. Angka di header studio bertuliskan simulasi dan menunjukkan $0.
-        </p>
-      ) : null}
+      <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
+        {llmBanner}
+      </p>
+      <RegenerateDemoButton count={demoReviewCount} />
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">

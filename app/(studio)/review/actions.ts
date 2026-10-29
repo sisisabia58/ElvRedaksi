@@ -25,8 +25,26 @@ import {
   setTemplate,
 } from "@/src/studio/drafts";
 import { enqueue } from "@/src/jobs/runner";
+import { enqueueDemoRegeneration } from "@/src/studio/regenerate-demo";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
+
+export type RegenerateDemoResult = { ok: true; queued: number } | { ok: false; error: string };
+
+export async function regenerateDemoDraftsAction(): Promise<RegenerateDemoResult> {
+  try {
+    const { sql, role } = await sessionUser();
+    if (role !== "admin") {
+      throw new Error("forbidden");
+    }
+    const queued = await enqueueDemoRegeneration(sql);
+    revalidatePath("/review");
+    revalidatePath("/pengaturan");
+    return { ok: true, queued };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Terjadi kesalahan" };
+  }
+}
 
 async function sessionUser(): Promise<{
   sql: Awaited<ReturnType<typeof getAppSql>>;

@@ -40,7 +40,9 @@ Then sign in at `http://127.0.0.1:43123/login`. Login is invite-only after that.
 
 Defaults are local fakes: `LLM_PROVIDER=demo` and `META_PROVIDER=fake`. Demo scoring and copy stay on the machine. Fake publish does not call Instagram.
 
-Demo mode does not call a model. Scoring and copy are fixed local payloads (every passing topic scores 80 and is tagged marketing). Slide images are screenshots of the in-app HTML templates (Playwright), not an image API. Demo rows are stored with `model = demo` and `cost_usd = 0`. The studio header shows those figures as simulasi and $0 until `LLM_PROVIDER=openai`.
+Demo mode does not call a model. Scoring and copy are fixed local payloads (every passing topic scores 80 and is tagged marketing). Slide images are screenshots of the in-app HTML templates (Playwright), not an image API. Demo rows are stored with `model = demo` and `cost_usd = 0`. The studio header shows those figures as simulasi and $0 while `LLM_PROVIDER` is `demo`. Pengaturan names the active provider and model.
+
+To use Gemini for scoring and copy, set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY`. Optional: `GEMINI_MODEL` (default `gemini-3.5-flash-lite`, the current cheap fast model for new projects), `GEMINI_INPUT_USD_PER_MTOK` (default `0.30`), and `GEMINI_OUTPUT_USD_PER_MTOK` (default `2.50`). Calls go to `generativelanguage.googleapis.com` and ask for JSON. `gemini-2.5-flash` is still a valid id, but Google limits it to accounts that already used the 2.5 family.
 
 To use OpenAI for scoring and copy, set:
 

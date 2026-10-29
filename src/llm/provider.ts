@@ -84,13 +84,162 @@ export class ScriptedLlm implements LlmProvider {
   }
 }
 
+export const OPENAI_DEFAULT_MODEL = "gpt-4o-mini";
+
+// Models page updated 2026-10-28: new projects should use gemini-3.5-flash-lite
+// or gemini-3.8-flash. gemini-2.5-flash is still served, with access limited to
+// accounts that already used the 2.5 family. Standard paid text rates below
+// match gemini-3.5-flash-lite ($0.30 / $2.50 per 1M tokens).
+export const GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite";
+export const GEMINI_DEFAULT_INPUT_USD_PER_MTOK = 0.3;
+export const GEMINI_DEFAULT_OUTPUT_USD_PER_MTOK = 2.5;
+
+export type LlmBanner = {
+  provider: "demo" | "openai" | "gemini";
+  model: string;
+  text: string;
+};
+
+export function llmBanner(): LlmBanner {
+  const raw = process.env.LLM_PROVIDER ?? "demo";
+  if (raw === "openai") {
+    const model = process.env.OPENAI_MODEL ?? OPENAI_DEFAULT_MODEL;
+    return {
+      provider: "openai",
+      model,
+      text: `AI aktif: OpenAI, model ${model}.`,
+    };
+  }
+  if (raw === "gemini") {
+    const model = process.env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+    return {
+      provider: "gemini",
+      model,
+      text: `AI aktif: Gemini, model ${model}.`,
+    };
+  }
+  return {
+    provider: "demo",
+    model: "demo",
+    text: "AI demo: skor dan naskah dibuat lokal, tanpa biaya. Angka di header studio bertuliskan simulasi dan menunjukkan $0. Provider: demo, model: demo.",
+  };
+}
+
+const SCORE_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    aspects: {
+      type: "OBJECT",
+      properties: {
+        relevansi: { type: "INTEGER" },
+        emosi: { type: "INTEGER" },
+        kebaruan: { type: "INTEGER" },
+        timing: { type: "INTEGER" },
+        shareability: { type: "INTEGER" },
+      },
+      required: ["relevansi", "emosi", "kebaruan", "timing", "shareability"],
+    },
+    tags: { type: "ARRAY", items: { type: "STRING" } },
+    sensitive: { type: "BOOLEAN" },
+    sensitiveReason: { type: "STRING", nullable: true },
+    blocked: { type: "BOOLEAN" },
+    reason: { type: "STRING" },
+  },
+  required: ["aspects", "tags", "sensitive", "sensitiveReason", "blocked", "reason"],
+};
+
+const COPY_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    slides: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          role: { type: "STRING", enum: ["cover", "point", "cta"] },
+          kicker: { type: "STRING" },
+          headline: { type: "STRING" },
+          body: { type: "STRING" },
+        },
+        required: ["role", "kicker", "headline", "body"],
+      },
+    },
+    caption: { type: "STRING" },
+    hashtags: { type: "ARRAY", items: { type: "STRING" } },
+    altHeadlines: { type: "ARRAY", items: { type: "STRING" } },
+  },
+  required: ["slides", "caption", "hashtags", "altHeadlines"],
+};
+
+type GeminiFetch = (
+  url: string,
+  init: { method: string; headers: Record<string, string>; body: string },
+) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+
+export class GeminiLlm implements LlmProvider {
+  constructor(private readonly fetchImpl: GeminiFetch = (url, init) => fetch(url, init)) {}
+
+  async complete(req: LlmRequest): Promise<LlmResult> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY missing");
+    }
+    const model = process.env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+    const res = await this.fetchImpl(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: req.system }] },
+          contents: [{ role: "user", parts: [{ text: req.user }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: req.purpose === "score" ? SCORE_RESPONSE_SCHEMA : COPY_RESPONSE_SCHEMA,
+          },
+        }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(`Gemini ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        thoughtsTokenCount?: number;
+      };
+    };
+    const text = (data.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? "")
+      .join("");
+    const inputRate = Number(
+      process.env.GEMINI_INPUT_USD_PER_MTOK ?? String(GEMINI_DEFAULT_INPUT_USD_PER_MTOK),
+    );
+    const outputRate = Number(
+      process.env.GEMINI_OUTPUT_USD_PER_MTOK ?? String(GEMINI_DEFAULT_OUTPUT_USD_PER_MTOK),
+    );
+    const usage = data.usageMetadata;
+    let costUsd = 0;
+    if (usage?.promptTokenCount != null && usage.candidatesTokenCount != null) {
+      const outputTokens = usage.candidatesTokenCount + (usage.thoughtsTokenCount ?? 0);
+      costUsd = (usage.promptTokenCount * inputRate + outputTokens * outputRate) / 1_000_000;
+    }
+    return { text, costUsd, model };
+  }
+}
+
 export class OpenAiLlm implements LlmProvider {
   async complete(req: LlmRequest): Promise<LlmResult> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       throw new Error("OPENAI_API_KEY missing");
     }
-    const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+    const model = process.env.OPENAI_MODEL ?? OPENAI_DEFAULT_MODEL;
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -129,6 +278,9 @@ export class OpenAiLlm implements LlmProvider {
 export function createLlm(): LlmProvider {
   if (process.env.LLM_PROVIDER === "openai") {
     return new OpenAiLlm();
+  }
+  if (process.env.LLM_PROVIDER === "gemini") {
+    return new GeminiLlm();
   }
   return new DemoLlm();
 }
