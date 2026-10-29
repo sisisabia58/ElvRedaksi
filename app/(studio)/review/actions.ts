@@ -25,11 +25,20 @@ import {
   setTemplate,
 } from "@/src/studio/drafts";
 import { enqueue } from "@/src/jobs/runner";
-import { enqueueDemoRegeneration } from "@/src/studio/regenerate-demo";
+import { demoRewriteSnapshot, enqueueDemoRegeneration, type DemoRewriteSnapshot } from "@/src/studio/regenerate-demo";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 export type RegenerateDemoResult = { ok: true; queued: number } | { ok: false; error: string };
+
+export async function demoRewriteSnapshotAction(): Promise<DemoRewriteSnapshot | null> {
+  try {
+    const { sql } = await sessionUser();
+    return demoRewriteSnapshot(sql);
+  } catch {
+    return null;
+  }
+}
 
 export async function regenerateDemoDraftsAction(): Promise<RegenerateDemoResult> {
   try {

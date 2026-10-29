@@ -1,9 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { regenerateDemoDraftsAction } from "@/app/(studio)/review/actions";
+import { demoRewriteSnapshotAction, regenerateDemoDraftsAction } from "@/app/(studio)/review/actions";
 import { Button } from "@/components/ui/button";
 import { demoRewriteSummary } from "@/src/studio/demo-rewrite-summary";
 
@@ -18,7 +18,31 @@ export function RegenerateDemoButton({
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const summary = demoRewriteSummary({ demoScores: count, done: progress.done, total: progress.total });
+  const [live, setLive] = useState({ count, done: progress.done, total: progress.total });
+  useEffect(() => {
+    setLive({ count, done: progress.done, total: progress.total });
+  }, [count, progress.done, progress.total]);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      const next = await demoRewriteSnapshotAction();
+      if (!stop && next) {
+        setLive({ count: next.demoScores, done: next.done, total: next.total });
+      }
+    };
+    const timer = window.setInterval(() => {
+      void tick();
+    }, 8000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+  const summary = demoRewriteSummary({
+    demoScores: live.count,
+    done: live.done,
+    total: live.total,
+  });
 
   return (
     <div className="space-y-2">
@@ -30,7 +54,7 @@ export function RegenerateDemoButton({
       <Button
         type="button"
         variant="outline"
-        disabled={pending || count === 0}
+        disabled={pending || live.count === 0}
         className="border-[var(--line)]"
         onClick={() => {
           setError(null);

@@ -365,6 +365,13 @@ export function PengaturanForm({
           }}
         >
           <Label htmlFor="logo">Logo</Label>
+          {settings.hasLogo ? (
+            <img
+              src="/pengaturan/logo"
+              alt="Logo Analyst Digest"
+              className="h-16 w-auto max-w-[220px] rounded-md bg-[#172339] object-contain p-2"
+            />
+          ) : null}
           <p className="text-xs text-[var(--muted)]">
             {settings.hasLogo
               ? "Logo tersimpan. Kosongkan unggahan untuk tetap memakai logo bawaan Analyst Digest."

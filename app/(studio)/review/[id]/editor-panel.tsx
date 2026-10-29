@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type { Slide } from "@/src/agents/copywriter";
 import type { DraftStatus } from "@/src/domain/status";
 import { reviewActionVisible } from "@/src/domain/status";
@@ -79,7 +79,8 @@ function previewSlideSrc(draft: DraftView, index: number): string {
   if (draft.usePublicMedia && draft.assetIds[index]) {
     return `/media/${draft.assetIds[index]}`;
   }
-  return `/review/${draft.id}/slide/${index}`;
+  const version = draft.assetIds[index] ?? draft.updatedAt;
+  return `/review/${draft.id}/slide/${index}?v=${encodeURIComponent(version)}`;
 }
 
 function downloadSlideSrc(draft: DraftView, index: number): string {
@@ -97,6 +98,15 @@ export function EditorPanel({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  useEffect(() => {
+    if (!draft.textDirty) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      router.refresh();
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [draft.textDirty, draft.id, router]);
   const [previewTab, setPreviewTab] = useState<"render" | "focal">("render");
   const [slideIndex, setSlideIndex] = useState(0);
   const initialFields = editorTextFields(draft, 0);

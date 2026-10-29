@@ -6,7 +6,7 @@ import { relativeId } from "@/src/domain/metrics";
 import { DRAFT_STATUSES, type DraftStatus } from "@/src/domain/status";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { countDraftsByStatus, listDrafts } from "@/src/studio/drafts";
-import { countDemoReviewDrafts, regenerateProgress } from "@/src/studio/regenerate-demo";
+import { demoRewriteSnapshot } from "@/src/studio/regenerate-demo";
 import { ReviewPanel } from "./review-panel";
 
 function parseStatus(raw: string | undefined): DraftStatus {
@@ -32,11 +32,10 @@ export default async function ReviewPage({
   }
 
   const now = new Date();
-  const [drafts, counts, demoReviewCount, progress] = await Promise.all([
+  const [drafts, counts, rewrite] = await Promise.all([
     listDrafts(sql, status),
     countDraftsByStatus(sql),
-    countDemoReviewDrafts(sql),
-    regenerateProgress(sql),
+    demoRewriteSnapshot(sql),
   ]);
 
   const cards = drafts.map((draft) => {
@@ -67,8 +66,8 @@ export default async function ReviewPage({
       canPublish={can(user.role, "publish")}
       canWrite={can(user.role, "review.write")}
       isAdmin={user.role === "admin"}
-      demoReviewCount={demoReviewCount}
-      regenerateProgress={progress}
+      demoReviewCount={rewrite.demoScores}
+      regenerateProgress={{ done: rewrite.done, total: rewrite.total }}
     />
   );
 }

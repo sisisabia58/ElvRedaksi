@@ -414,6 +414,38 @@ describe("designer", () => {
     await expectPriorAssets(sql);
   });
 
+  it("keeps the previous picture when copy changes but updated_at does not", async () => {
+    const sql = await seedDesignerDraft("needs_review");
+    await insertPriorAssets(sql);
+    const replacement = [
+      { role: "cover", kicker: "Baru", headline: "Judul baru yang cukup", body: "Teks baru." },
+      ...slides.slice(1),
+    ];
+    await runDesigner({
+      sql,
+      payload: { draftId: DRAFT_ID },
+      manual: true,
+      now: new Date(),
+      rasterizer: new RacingRasterizer(async () => {
+        await sql.rows(`update drafts set slides = $1::jsonb, text_dirty = true where id = $2`, [
+          JSON.stringify(replacement),
+          DRAFT_ID,
+        ]);
+      }),
+    });
+    const status = await sql.rows<{ status: string; text_dirty: boolean; headline: string }>(
+      `select status, text_dirty, slides->0->>'headline' as headline from drafts`,
+    );
+    expect(status[0]).toMatchObject({
+      status: "needs_review",
+      text_dirty: true,
+      headline: "Judul baru yang cukup",
+    });
+    const log = await sql.rows("select id from activity where agent = 'designer'");
+    expect(log).toHaveLength(0);
+    await expectPriorAssets(sql);
+  });
+
   it("keeps text_dirty when a newer save lands during a re-render", async () => {
     const sql = await seedDesignerDraft("needs_review");
     await insertPriorAssets(sql);

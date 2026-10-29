@@ -511,15 +511,14 @@ async function rewriteDemoReviewDraft(
        alt_headlines = $4::jsonb,
        text_dirty = true,
        status = 'needs_review',
-       updated_at = $5
-     where id = $6 and status = 'needs_review'
+       updated_at = clock_timestamp()
+     where id = $5 and status = 'needs_review'
      returning id`,
     [
       JSON.stringify(slides),
       copy.caption,
       JSON.stringify(copy.hashtags),
       JSON.stringify(copy.altHeadlines),
-      ctx.now,
       stillReview.id,
     ],
   );
@@ -649,8 +648,8 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
              alt_headlines = $4::jsonb,
              text_dirty = true,
              status = $5,
-             updated_at = $6
-           where id = $7 and status = $8
+             updated_at = clock_timestamp()
+           where id = $6 and status = $7
            returning id`,
           [
             JSON.stringify(slides),
@@ -658,7 +657,6 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
             JSON.stringify(copy.hashtags),
             JSON.stringify(copy.altHeadlines),
             nextStatus,
-            ctx.now,
             existingDraft.id,
             locked.status,
           ],
@@ -835,6 +833,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   const startedAt = draft.updated_at;
   const logoDataUrl = dataUrlFromBytes(draft.logo, draft.logo_type ?? "") ?? defaultLogoDataUrl();
 
+  const renderedSlidesJson = JSON.stringify(allSlides);
   const rendered: Uint8Array[] = [];
   try {
     try {
@@ -864,8 +863,8 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await ctx.sql.rows(
-        `update drafts set error = $1 where id = $2 and ${sameUpdatedAt("$3")}`,
-        [message, draftId, startedAt],
+        `update drafts set error = $1 where id = $2 and ${sameUpdatedAt("$3")} and slides = $4::jsonb`,
+        [message, draftId, startedAt, renderedSlidesJson],
       );
       throw error;
     }
@@ -884,23 +883,25 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
           [randomUUID(), draftId, index, rendered[index]],
         );
       }
+      const versionSql = `status = $2 and ${sameUpdatedAt("$3")} and slides = $4::jsonb and format = $5 and template = $6 and focal_y = $7`;
+      const versionArgs = [draftId, current, startedAt, renderedSlidesJson, format, template, draft.focal_y];
       let updated: { id: string }[];
       if (current === "drafted") {
         assertTransition("worker", "drafted", "needs_review");
         updated = await tx.rows<{ id: string }>(
           `update drafts
-           set status = 'needs_review', text_dirty = false, error = null, updated_at = $1
-           where id = $2 and status = 'drafted' and ${sameUpdatedAt("$3")}
+           set status = 'needs_review', text_dirty = false, error = null, updated_at = clock_timestamp()
+           where id = $1 and ${versionSql}
            returning id`,
-          [ctx.now, draftId, startedAt],
+          versionArgs,
         );
       } else {
         updated = await tx.rows<{ id: string }>(
           `update drafts
-           set text_dirty = false, error = null, updated_at = $1
-           where id = $2 and status = $3 and ${sameUpdatedAt("$4")}
+           set text_dirty = false, error = null, updated_at = clock_timestamp()
+           where id = $1 and ${versionSql}
            returning id`,
-          [ctx.now, draftId, current, startedAt],
+          versionArgs,
         );
       }
       if (updated.length === 0) {

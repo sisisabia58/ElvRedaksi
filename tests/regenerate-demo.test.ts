@@ -4,7 +4,7 @@ import { seedDefaults } from "../src/db/seed";
 import { ScriptedLlm } from "../src/llm/provider";
 import { runCopywriter } from "../src/jobs/handlers";
 import { demoRewriteSummary } from "../src/studio/demo-rewrite-summary";
-import { enqueueDemoRegeneration, regenerateProgress } from "../src/studio/regenerate-demo";
+import { demoRewriteSnapshot, enqueueDemoRegeneration } from "../src/studio/regenerate-demo";
 
 const SOURCE = "11111111-1111-1111-1111-111111111111";
 const DEMO_TOPIC = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
@@ -187,19 +187,52 @@ describe("demo draft regeneration", () => {
     expect(jobs).toHaveLength(0);
   });
 
-  it("counts finished rewrites separately from jobs that are still open or failed", async () => {
+  it("counts rewritten drafts even when the job still carries a Gemini error", async () => {
     const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      SOURCE,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await seedPair(sql, {
+      topicId: DEMO_TOPIC,
+      draftId: DEMO_DRAFT,
+      status: "needs_review",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "done1",
+    });
+    await sql.rows(`update drafts set slides = $1::jsonb where id = $2`, [
+      JSON.stringify(newCopy.slides),
+      DEMO_DRAFT,
+    ]);
+    await seedPair(sql, {
+      topicId: OTHER_TOPIC,
+      draftId: OTHER_DRAFT,
+      status: "needs_review",
+      reason: "Layak untuk audiens marketing (demo)",
+      shortCode: "stub1",
+    });
+    await sql.rows(`update drafts set slides = $1::jsonb where id = $2`, [
+      JSON.stringify([
+        { role: "cover", kicker: "AI", headline: "Masih judul demo yang lama", body: "Satu kalimat pembuka." },
+      ]),
+      OTHER_DRAFT,
+    ]);
     const now = new Date("2026-10-29T13:00:00Z");
-    async function job(id: string, finished: Date | null, error: string | null) {
-      await sql.rows(
-        `insert into jobs (id, name, payload, run_at, finished_at, error, attempts)
-         values ($1, 'copywriter.write', $2::jsonb, $3, $4, $5, 0)`,
-        [id, JSON.stringify({ regenerateDemo: true }), now, finished, error],
-      );
-    }
-    await job("11111111-1111-4111-8111-111111111111", now, null);
-    await job("22222222-2222-4222-8222-222222222222", now, "naskah tidak valid");
-    await job("33333333-3333-4333-8333-333333333333", null, null);
-    expect(await regenerateProgress(sql)).toEqual({ done: 1, total: 3 });
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, finished_at, error)
+       values ($1, 'copywriter.write', $2::jsonb, $3, $3, 'Gemini 503'),
+              ($4, 'copywriter.write', $5::jsonb, $3, null, 'Gemini timeout')`,
+      [
+        "11111111-1111-4111-8111-111111111111",
+        JSON.stringify({ topicId: DEMO_TOPIC, regenerateDemo: true }),
+        now,
+        "22222222-2222-4222-8222-222222222222",
+        JSON.stringify({ topicId: OTHER_TOPIC, regenerateDemo: true }),
+      ],
+    );
+    expect(await demoRewriteSnapshot(sql)).toEqual({ demoScores: 1, done: 1, total: 2 });
   });
 });

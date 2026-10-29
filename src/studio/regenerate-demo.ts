@@ -3,18 +3,55 @@ import { enqueue } from "../jobs/runner";
 
 const DEMO_SCORE_REASON = "%(demo)";
 
-export async function regenerateProgress(sql: Sql): Promise<{ done: number; total: number }> {
-  const rows = await sql.rows<{ total: string; done: string }>(
-    `select
-       (count(*) filter (where coalesce(payload->>'regenerateDemo', '') = 'true'))::int as total,
-       (count(*) filter (
-         where coalesce(payload->>'regenerateDemo', '') = 'true'
-           and finished_at is not null
-           and coalesce(error, '') = ''
-       ))::int as done
-     from jobs`,
+const DEMO_STUB = "Satu kalimat pembuka.";
+
+export type DemoRewriteSnapshot = {
+  demoScores: number;
+  done: number;
+  total: number;
+};
+
+// One read: leftover demo scores, rewritten copy, and the rewrite cohort.
+// A Gemini retry used to leave jobs.error set, so a job counter stayed at the
+// first-try successes even after the draft text had already changed.
+export async function demoRewriteSnapshot(sql: Sql): Promise<DemoRewriteSnapshot> {
+  const rows = await sql.rows<{ demo_scores: number; done: number; total: number }>(
+    `with cohort as (
+       select d.id, d.slides
+       from drafts d
+       where exists (
+         select 1 from jobs j
+         where j.name = 'copywriter.write'
+           and coalesce(j.payload->>'regenerateDemo', '') = 'true'
+           and j.payload->>'topicId' = d.topic_id::text
+       )
+     )
+     select
+       (
+         select count(*)::int
+         from drafts d
+         join topics t on t.id = d.topic_id
+         where d.status = 'needs_review'
+           and position('(demo)' in coalesce(t.score_reason, '')) > 0
+       ) as demo_scores,
+       (select count(*)::int from cohort) as total,
+       (
+         select count(*)::int from cohort c
+         where position($1 in c.slides::text) = 0
+       ) as done`,
+    [DEMO_STUB],
   );
-  return { done: Number(rows[0]?.done ?? 0), total: Number(rows[0]?.total ?? 0) };
+  const row = rows[0];
+  return {
+    demoScores: Number(row?.demo_scores ?? 0),
+    done: Number(row?.done ?? 0),
+    total: Number(row?.total ?? 0),
+  };
+}
+
+export async function regenerateProgress(sql: Sql): Promise<{ done: number; total: number }> {
+  const snapshot = await demoRewriteSnapshot(sql);
+  return { done: snapshot.done, total: snapshot.total };
 }
 
 export async function countDemoReviewDrafts(sql: Sql): Promise<number> {

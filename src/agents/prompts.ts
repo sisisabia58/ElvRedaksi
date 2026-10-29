@@ -36,6 +36,7 @@ Aturan jumlah slide ini mengalahkan catatan carousel di brain bila berbeda:
 - JSON tetap diakhiri satu slide role "cta". Slide itu menjaga format teaser. Template Berita Pro tidak menggambarnya sebagai slide terpisah.
 - Sampul (role cover): headline bahasa Indonesia, pertanyaan atau pernyataan pendek, paling banyak 10 kata, tetap sesuai cuplikan.
 - Slide isi (role point): tepat ${points} buah. Headline dan body hanya dari cuplikan. Body sekitar 2–3 kalimat. Jangan menambah angka, nama, kutipan, atau kejadian yang tidak ada di cuplikan.
+- Jangan akhiri body dengan nama media atau sumber. Sumber hanya masuk caption.
 - Slide cta: headline berisi ajakan membaca selengkapnya di link bio. ${follow}
 - kicker adalah kategori singkat.
 - Jangan mengarang fakta.

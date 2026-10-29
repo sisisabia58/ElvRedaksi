@@ -31,12 +31,10 @@ export type JobDeps = {
   concurrency?: number;
 };
 
-const WORK_HOUR_GATED: Set<JobName> = new Set([
-  "scout.scan",
-  "analyst.score",
-  "copywriter.write",
-  "designer.render",
-]);
+// Automatic scout, analyst, and copy sleep outside jam kerja.
+// Rewrites and renders a person queued are marked manual and always run.
+// Designer keeps rendering too, including the picture that follows a rewrite.
+const WORK_HOUR_GATED: Set<JobName> = new Set(["scout.scan", "analyst.score", "copywriter.write"]);
 
 type ClaimedJob = {
   id: string;
@@ -271,7 +269,7 @@ async function enqueueDirtySlideRenders(sql: Sql, now: Date): Promise<void> {
            and j.payload->>'draftId' = d.id::text
            and (
              j.finished_at is null
-             or j.finished_at >= d.updated_at
+             or (j.finished_at >= d.updated_at and coalesce(j.error, '') <> '')
            )
        )`,
   );
@@ -342,7 +340,7 @@ async function runClaimedJob(sql: Sql, job: ClaimedJob, now: Date, deps: JobDeps
       await deps.handlers[job.name](ctx);
       try {
         const finished = await sql.rows<{ id: string }>(
-          `update jobs set finished_at = $1, locked_at = null where id = $2 and ${sameLock("$3")} returning id`,
+          `update jobs set finished_at = $1, locked_at = null, error = null where id = $2 and ${sameLock("$3")} returning id`,
           [now, job.id, job.lockToken],
         );
         return finished.length > 0;

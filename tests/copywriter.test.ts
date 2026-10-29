@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCopy } from "../src/agents/copywriter";
+import { parseCopy, stripTrailingSource } from "../src/agents/copywriter";
 import { DemoLlm } from "../src/llm/provider";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
@@ -51,6 +51,30 @@ describe("copywriter", () => {
       "point",
       "cta",
     ]);
+  });
+
+  it("strips a trailing source name and keeps it in the caption", () => {
+    expect(
+      stripTrailingSource(
+        "Pasokan domestik sudah tercukupi sepenuhnya. ANTARA Terkini",
+        "ANTARA Terkini",
+      ),
+    ).toBe("Pasokan domestik sudah tercukupi sepenuhnya.");
+    expect(stripTrailingSource("ANTARA Terkini", "ANTARA Terkini")).toBe("ANTARA Terkini");
+    expect(stripTrailingSource("Artikel asli ada di Contoh.", "Contoh")).toBe(
+      "Artikel asli ada di Contoh.",
+    );
+    const copy = parseCopy(
+      JSON.stringify({
+        ...good,
+        slides: good.slides.map((slide, index) =>
+          index === 1 ? { ...slide, body: "Uji coba dibuka minggu ini. Contoh" } : slide,
+        ),
+      }),
+      "Contoh",
+    );
+    expect(copy.slides[1]?.body).toBe("Uji coba dibuka minggu ini.");
+    expect(copy.caption).toContain("Contoh");
   });
 
   it("rejects a carousel that forgets the source", () => {

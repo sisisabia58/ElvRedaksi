@@ -86,6 +86,25 @@ describe("berita pro", () => {
     const withPhoto = renderBeritaProHtml(slideInput(0, { photoDataUrl: photo }));
     expect(withPhoto).toContain("Foto: ANTARA");
     expect(withPhoto).toContain("mix-blend-mode:multiply");
+    expect(withPhoto).toContain("brightness(1.45)");
+    expect(withPhoto).toContain("height:810px");
+
+    const sourced = renderBeritaProHtml(
+      slideInput(1, {
+        slide: {
+          ...slides[1],
+          body: "Pasokan domestik sudah tercukupi sepenuhnya. ANTARA Terkini",
+        },
+        sourceName: "ANTARA Terkini",
+        logoDataUrl: photo,
+      }),
+    );
+    expect(sourced).toContain("Pasokan domestik sudah tercukupi sepenuhnya.");
+    expect(sourced).not.toContain("sepenuhnya. ANTARA Terkini");
+    expect(sourced).toContain("Sumber: ANTARA Terkini");
+    expect(sourced).toContain("line-height:1.48");
+    expect(sourced).toContain("object-fit:contain");
+    expect(sourced).toContain("padding:");
 
     const middle = renderSlideHtml({
       template: "berita_pro",

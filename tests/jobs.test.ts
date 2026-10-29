@@ -41,6 +41,44 @@ describe("jobs", () => {
     const ran = await runDueJobs(sql, night, deps);
     expect(ran).toBe(2);
     expect(seen.sort()).toEqual(["publish", "scout"]);
+
+    const nightWork: string[] = [];
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { manualRewrite: true },
+      runAt: night,
+      manual: true,
+    });
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { auto: true },
+      runAt: night,
+      manual: false,
+    });
+    await enqueue(sql, {
+      name: "designer.render",
+      payload: { draftId: "auto-render" },
+      runAt: night,
+      manual: false,
+    });
+    const nightDeps = {
+      ...deps,
+      handlers: {
+        ...deps.handlers,
+        "copywriter.write": async (ctx: { payload: Record<string, unknown>; manual: boolean }) => {
+          nightWork.push(ctx.manual ? "manual-copy" : "auto-copy");
+        },
+        "designer.render": async () => {
+          nightWork.push("designer");
+        },
+      },
+    };
+    await runDueJobs(sql, night, nightDeps);
+    expect(nightWork.sort()).toEqual(["designer", "manual-copy"]);
+    const sleeping = await sql.rows<{ finished_at: Date | null }>(
+      "select finished_at from jobs where name = 'copywriter.write' and payload->>'auto' = 'true'",
+    );
+    expect(sleeping[0]?.finished_at ?? null).toBeNull();
     const waiting = await sql.rows<{ finished_at: string | null }>(
       "select finished_at from jobs where payload->>'auto' = 'true'",
     );

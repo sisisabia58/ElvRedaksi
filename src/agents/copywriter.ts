@@ -28,6 +28,33 @@ function invalid(): never {
   throw new Error("naskah tidak valid");
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Drop a source credit parked after the sentence. The Sumber line already names it. */
+export function stripTrailingSource(body: string, sourceName: string): string {
+  const original = body.trim();
+  if (!original) {
+    return original;
+  }
+  const names = [sourceName.trim(), "ANTARA Terkini", "ANTARA"].filter(
+    (name, index, all) => name.length > 0 && all.indexOf(name) === index,
+  );
+  names.sort((a, b) => b.length - a.length);
+  for (const name of names) {
+    const pattern = new RegExp(`([.!?…])\\s+\\(?\\s*${escapeRegExp(name)}\\s*\\)?\\s*$`, "i");
+    if (!pattern.test(original)) {
+      continue;
+    }
+    const next = original.replace(pattern, "$1").trim();
+    if (next.length >= 8 && next !== original) {
+      return next;
+    }
+  }
+  return original;
+}
+
 export function parseCopy(text: string, sourceName: string): DraftCopy {
   let parsed: unknown;
   try {
@@ -74,7 +101,11 @@ export function parseCopy(text: string, sourceName: string): DraftCopy {
     if (!slideResult.success || slideResult.data.role !== expectedRole) {
       invalid();
     }
-    slides.push({ ...slideResult.data, kicker: normalizeKicker(slideResult.data.kicker) });
+    slides.push({
+      ...slideResult.data,
+      kicker: normalizeKicker(slideResult.data.kicker),
+      body: stripTrailingSource(slideResult.data.body, sourceName),
+    });
   }
 
   return {
