@@ -62,17 +62,16 @@ Every topic stores the article URL and the source name. Every slide renders `Sum
 
 ## Docker
 
-Postgres 16, the Next.js app, and a one-minute cron live in Compose:
+Postgres 16, the Next.js app, and a one-minute cron live in Compose. Assign `CRON_SECRET` yourself, export it, and only then run `docker compose up --build`. The value is required, it must not be a value from this repository, and Compose stops if the variable is unset or empty. The web port is bound to localhost (`127.0.0.1:43123`).
 
 ```bash
+export CRON_SECRET
 docker compose up --build
 ```
 
 - `db`: user, database, and password `redaksi`, volume `pg`
-- `web`: port `43123`, `DATABASE_URL=postgres://redaksi:redaksi@db:5432/redaksi`, `LLM_PROVIDER=demo`, `META_PROVIDER=fake`, `PUBLIC_BASE_URL=http://127.0.0.1:43123`, `SEED_DEMO=1`
+- `web`: `127.0.0.1:43123:43123`, `DATABASE_URL=postgres://redaksi:redaksi@db:5432/redaksi`, `LLM_PROVIDER=demo`, `META_PROVIDER=fake`, `PUBLIC_BASE_URL=http://127.0.0.1:43123`, `SEED_DEMO=1`
 - `cron`: `POST http://web:43123/api/cron` every 60 seconds with `Authorization: Bearer $CRON_SECRET`
-
-Set `CRON_SECRET` in the environment or in a `.env` file next to the compose file. If it is unset, Compose falls back to `redaksi-dev-cron`. Replace that on any machine other people can reach.
 
 `npm start` inside the image runs with `NODE_ENV=production`, so the demo admin is not created even though Compose sets `SEED_DEMO=1`. For a local login, use `SEED_DEMO=1 npm run dev` against the database you want. On a VPS, create the first admin with a non-production boot, then run the container in production and unset `SEED_DEMO`.
 

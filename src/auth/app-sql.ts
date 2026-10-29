@@ -62,28 +62,51 @@ function createLockedPostgresSql(
   };
 }
 
-async function initPostgresSql(databaseUrl: string): Promise<Sql> {
-  const { Client } = await import("pg");
-  const client = new Client({ connectionString: databaseUrl });
-  await client.connect();
-  const sql = createLockedPostgresSql(async (text, params) => {
-    const result = await client.query(text, params);
-    return result.rows;
+function initPostgresSql(databaseUrl: string): Promise<Sql> {
+  const state: { cached?: Promise<Sql> } = {};
+  const drop = () => {
+    if (state.cached && globalThis.__redaksiAppSql === state.cached) {
+      globalThis.__redaksiAppSql = undefined;
+    }
+  };
+
+  const attempt = (async () => {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: databaseUrl });
+    // A dropped socket emits error, then end. No listener crashes the process,
+    // and a cached client would keep serving queries on the dead connection.
+    client.on("error", drop);
+    client.on("end", drop);
+    await client.connect();
+    const sql = createLockedPostgresSql(async (text, params) => {
+      const result = await client.query(text, params);
+      return result.rows;
+    });
+    const { boot } = await import("../db/boot");
+    await boot(sql);
+    return sql;
+  })();
+
+  state.cached = attempt.catch((error: unknown) => {
+    drop();
+    throw error;
   });
-  const { boot } = await import("../db/boot");
-  await boot(sql);
-  return sql;
+  return state.cached;
 }
 
 /** Server SQL: Postgres when DATABASE_URL is set, otherwise one embedded PGlite. */
 export async function getAppSql(): Promise<Sql> {
   if (!globalThis.__redaksiAppSql) {
     const databaseUrl = process.env.DATABASE_URL?.trim();
-    const pending = databaseUrl ? initPostgresSql(databaseUrl) : initEmbeddedSql();
-    globalThis.__redaksiAppSql = pending.catch((error: unknown) => {
-      globalThis.__redaksiAppSql = undefined;
-      throw error;
-    });
+    if (databaseUrl) {
+      globalThis.__redaksiAppSql = initPostgresSql(databaseUrl);
+    } else {
+      const pending = initEmbeddedSql();
+      globalThis.__redaksiAppSql = pending.catch((error: unknown) => {
+        globalThis.__redaksiAppSql = undefined;
+        throw error;
+      });
+    }
   }
   return globalThis.__redaksiAppSql;
 }

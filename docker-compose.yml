@@ -16,10 +16,10 @@ services:
   web:
     build: .
     ports:
-      - "43123:43123"
+      - "127.0.0.1:43123:43123"
     environment:
       DATABASE_URL: postgres://redaksi:redaksi@db:5432/redaksi
-      CRON_SECRET: ${CRON_SECRET:-redaksi-dev-cron}
+      CRON_SECRET: ${CRON_SECRET:?set CRON_SECRET}
       LLM_PROVIDER: demo
       META_PROVIDER: fake
       PUBLIC_BASE_URL: http://127.0.0.1:43123
@@ -32,7 +32,7 @@ services:
   cron:
     image: curlimages/curl
     environment:
-      CRON_SECRET: ${CRON_SECRET:-redaksi-dev-cron}
+      CRON_SECRET: ${CRON_SECRET:?set CRON_SECRET}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
