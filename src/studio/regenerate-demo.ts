@@ -136,3 +136,33 @@ export async function requeueStoppedGeminiRewrites(sql: Sql, now = new Date()): 
   }
   return rows.length;
 }
+
+// Demo copy that has no open rewrite: the job failed, finished without
+// replacing the stub, or was never created. One manual job per draft, parked
+// until the Gemini pause lifts. A second call finds the open job and skips it.
+export async function requeuePlaceholderRewrites(sql: Sql, now = new Date()): Promise<number> {
+  const pause = await readGeminiPause(sql, now);
+  const runAt = pause?.until && pause.until.getTime() > now.getTime() ? pause.until : now;
+  const rows = await sql.rows<{ topic_id: string }>(
+    `select d.topic_id
+     from drafts d
+     where d.status = 'needs_review'
+       and position($1 in d.slides::text) > 0
+       and not exists (
+         select 1 from jobs j
+         where j.name = 'copywriter.write'
+           and j.finished_at is null
+           and j.payload->>'topicId' = d.topic_id::text
+       )`,
+    [PLACEHOLDER_BODY],
+  );
+  for (const row of rows) {
+    await enqueue(sql, {
+      name: "copywriter.write",
+      payload: { topicId: row.topic_id, regenerateDemo: true },
+      runAt,
+      manual: true,
+    });
+  }
+  return rows.length;
+}

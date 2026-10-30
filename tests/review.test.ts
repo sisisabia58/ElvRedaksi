@@ -781,10 +781,17 @@ describe("review", () => {
     await expect(
       scheduleDraft(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", new Date("2026-11-02T02:00:00Z")),
     ).rejects.toThrow(/menunggu tulis ulang/);
+    await expect(postDraftNow(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1")).rejects.toThrow(
+      /menunggu tulis ulang/,
+    );
     const still = await sql.rows<{ status: string }>(
       "select status from drafts where id = $1",
       ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"],
     );
     expect(still[0]?.status).toBe("needs_review");
+    const publishJobs = await sql.rows<{ id: string }>(
+      "select id from jobs where name = 'publisher.publish'",
+    );
+    expect(publishJobs).toHaveLength(0);
   });
 });

@@ -23,6 +23,46 @@ export function overviewStatusChip(input: {
   return `${input.awake ? "AI aktif" : "AI tidur"} · jam kerja ${input.workStart}–${input.workEnd} WIB`;
 }
 
+export type NewsroomQueues = {
+  rewriteQueue: number;
+  renderOpen: number;
+  renderDone: number;
+  reviewDrafts: number;
+};
+
+export function rewriteQueueLabel(count: number): string {
+  return `${count} antre tulis ulang`;
+}
+
+export function renderProgressLabel(done: number, total: number, open: number): string {
+  const base = `${done} dari ${total} gambar selesai`;
+  return open > 0 ? `${base} · ${open} dalam antrian` : base;
+}
+
+export async function newsroomQueues(sql: Sql): Promise<NewsroomQueues> {
+  const rows = await sql.rows<{
+    rewrite_queue: string;
+    render_open: string;
+    review_drafts: string;
+    render_dirty: string;
+  }>(
+    `select
+       (select count(*)::int from jobs where name = 'copywriter.write' and finished_at is null) as rewrite_queue,
+       (select count(*)::int from jobs where name = 'designer.render' and finished_at is null) as render_open,
+       (select count(*)::int from drafts where status = 'needs_review') as review_drafts,
+       (select count(*)::int from drafts where status = 'needs_review' and text_dirty) as render_dirty`,
+  );
+  const row = rows[0];
+  const reviewDrafts = Number(row?.review_drafts ?? 0);
+  const renderDirty = Number(row?.render_dirty ?? 0);
+  return {
+    rewriteQueue: Number(row?.rewrite_queue ?? 0),
+    renderOpen: Number(row?.render_open ?? 0),
+    renderDone: Math.max(0, reviewDrafts - renderDirty),
+    reviewDrafts,
+  };
+}
+
 export async function funnelCounts(sql: Sql, now: Date = new Date()): Promise<Funnel> {
   const rows = await sql.rows<{
     arrived24h: string;

@@ -39,7 +39,8 @@ export async function cachedImageDataUrl(sql: Sql, url: string): Promise<string 
     if (cached[0]) {
       return dataUrlFromBytes(cached[0].bytes, cached[0].content_type);
     }
-    const fetched = await fetchPublicBytes(url, 8000, MAX_IMAGE_BYTES);
+    // ANTARA's image host sometimes answers slower than the 8s page fetch.
+    const fetched = await fetchPublicBytes(url, 20_000, MAX_IMAGE_BYTES);
     const type = normalizeImageType(fetched.contentType);
     if (!type || fetched.bytes.byteLength === 0 || fetched.bytes.byteLength > MAX_IMAGE_BYTES) {
       return null;

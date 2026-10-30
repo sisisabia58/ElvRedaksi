@@ -5,7 +5,16 @@ import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { relativeId } from "@/src/domain/metrics";
 import { greeting, isWithinWorkHours } from "@/src/domain/time";
 import { readGeminiPause } from "@/src/llm/gemini-gate";
-import { agentCards, funnelCounts, overviewStatusChip, recentActivity, type AgentId } from "@/src/studio/overview";
+import {
+  agentCards,
+  funnelCounts,
+  newsroomQueues,
+  overviewStatusChip,
+  recentActivity,
+  renderProgressLabel,
+  rewriteQueueLabel,
+  type AgentId,
+} from "@/src/studio/overview";
 import { OverviewScanButton } from "./overview-scan-button";
 
 const AGENT_PRESENTATION: Record<AgentId, { label: string; color: string }> = {
@@ -29,7 +38,7 @@ function agentLabel(agent: string): { label: string; color: string } {
 export default async function OverviewPage() {
   const sql = await getAppSql();
   const now = new Date();
-  const [funnel, cards, activity, hourRows, geminiPause] = await Promise.all([
+  const [funnel, cards, activity, hourRows, geminiPause, queues] = await Promise.all([
     funnelCounts(sql, now),
     agentCards(sql, now),
     recentActivity(sql),
@@ -37,6 +46,7 @@ export default async function OverviewPage() {
       "select work_start, work_end from brand where id = 1",
     ),
     readGeminiPause(sql),
+    newsroomQueues(sql),
   ]);
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -78,6 +88,12 @@ export default async function OverviewPage() {
               }`}
             >
               {hoursChip}
+            </span>
+            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
+              {rewriteQueueLabel(queues.rewriteQueue)}
+            </span>
+            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
+              {renderProgressLabel(queues.renderDone, queues.reviewDrafts, queues.renderOpen)}
             </span>
           </div>
           {canScan ? <OverviewScanButton /> : null}

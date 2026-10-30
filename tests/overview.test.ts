@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createTestSql } from "../src/db/client";
-import { funnelCounts, overviewStatusChip } from "../src/studio/overview";
+import {
+  funnelCounts,
+  newsroomQueues,
+  overviewStatusChip,
+  renderProgressLabel,
+  rewriteQueueLabel,
+} from "../src/studio/overview";
 
 const SOURCE_ID = "11111111-1111-1111-1111-111111111111";
 const TOPIC_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
@@ -57,6 +63,48 @@ describe("overview funnel", () => {
         geminiPause: null,
       }),
     ).toBe("AI aktif · jam kerja 07:00–22:00 WIB");
+  });
+
+  it("labels the rewrite queue and how many review slides are drawn", () => {
+    expect(rewriteQueueLabel(55)).toBe("55 antre tulis ulang");
+    expect(renderProgressLabel(84, 102, 18)).toBe("84 dari 102 gambar selesai · 18 dalam antrian");
+    expect(renderProgressLabel(102, 102, 0)).toBe("102 dari 102 gambar selesai");
+  });
+
+  it("counts open rewrites and unfinished review renders", async () => {
+    const sql = await createTestSql();
+    await seedPostedDrafts(sql);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, text_dirty)
+       values ($1,$2,'needs_review','carousel_full','berita_pro','[]'::jsonb,'c','[]'::jsonb,'[]'::jsonb,'rev1',true)`,
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3", TOPIC_A],
+    );
+    const now = new Date("2026-10-30T06:00:00Z");
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, manual)
+       values
+         ($1, 'copywriter.write', $2::jsonb, $3, true),
+         ($4, 'designer.render', $5::jsonb, $3, true),
+         ($6, 'copywriter.write', $2::jsonb, $3, true)`,
+      [
+        "11111111-1111-4111-8111-111111111111",
+        JSON.stringify({ topicId: TOPIC_A, regenerateDemo: true }),
+        now,
+        "22222222-2222-4222-8222-222222222222",
+        JSON.stringify({ draftId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3" }),
+        "33333333-3333-4333-8333-333333333333",
+      ],
+    );
+    await sql.rows("update jobs set finished_at = $1 where id = $2", [
+      now,
+      "33333333-3333-4333-8333-333333333333",
+    ]);
+    expect(await newsroomQueues(sql)).toEqual({
+      rewriteQueue: 1,
+      renderOpen: 1,
+      renderDone: 0,
+      reviewDrafts: 1,
+    });
   });
 
   it("counts posted drafts only within the current Jakarta week, end exclusive", async () => {

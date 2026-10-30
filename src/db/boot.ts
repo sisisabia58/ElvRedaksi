@@ -3,6 +3,7 @@ import { hashPassword } from "../auth/password";
 import { DEFAULT_ACCENT } from "../domain/brand";
 import { normalizeCategories, normalizeKicker } from "../domain/tags";
 import { enqueue, type JobName } from "../jobs/runner";
+import { requeuePlaceholderRewrites } from "../studio/regenerate-demo";
 import { readDefaultLogo } from "../render/brand-logo";
 import type { Sql } from "./client";
 import { seedDefaults } from "./seed";
@@ -206,6 +207,7 @@ export async function boot(sql: Sql): Promise<void> {
   await migrateStoredBrand(sql);
   await normalizeStoredTags(sql);
   await normalizeStoredKickers(sql);
+  await requeuePlaceholderRewrites(sql);
   await seedDemoAdmin(sql);
   for (const name of BOOT_JOBS) {
     await enqueueIfUnfinished(sql, name);

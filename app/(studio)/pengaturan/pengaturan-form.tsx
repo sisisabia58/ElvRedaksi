@@ -47,7 +47,7 @@ export function PengaturanForm({
 }: {
   settings: Settings;
   showMetaBanner: boolean;
-  llmBanner: string;
+  llmBanner: string | null;
   geminiPause?: string | null;
   demoReviewCount: number;
   regenerateProgress: { done: number; total: number };
@@ -134,11 +134,13 @@ export function PengaturanForm({
           Mode latihan: posting tidak dikirim ke Instagram.
         </p>
       ) : null}
-      <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
-        {llmBanner}
-      </p>
-      {geminiPause ? (
+      {llmBanner ? (
         <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
+          {llmBanner}
+        </p>
+      ) : null}
+      {geminiPause ? (
+        <p className="text-sm rounded-lg border border-amber-500/60 bg-amber-500/10 px-4 py-3 text-amber-100">
           {geminiPause}
         </p>
       ) : null}

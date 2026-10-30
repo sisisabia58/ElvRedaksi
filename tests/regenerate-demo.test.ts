@@ -5,7 +5,12 @@ import { ScriptedLlm } from "../src/llm/provider";
 import { runCopywriter } from "../src/jobs/handlers";
 import { demoRewriteSummary } from "../src/studio/demo-rewrite-summary";
 import { recordGeminiPause } from "../src/llm/gemini-gate";
-import { demoRewriteSnapshot, enqueueDemoRegeneration, requeueStoppedGeminiRewrites } from "../src/studio/regenerate-demo";
+import {
+  demoRewriteSnapshot,
+  enqueueDemoRegeneration,
+  requeuePlaceholderRewrites,
+  requeueStoppedGeminiRewrites,
+} from "../src/studio/regenerate-demo";
 
 const SOURCE = "11111111-1111-1111-1111-111111111111";
 const DEMO_TOPIC = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
@@ -304,5 +309,87 @@ describe("demo draft regeneration", () => {
     const runAt = queued[0]?.run_at instanceof Date ? queued[0].run_at : new Date(String(queued[0]?.run_at));
     expect(runAt.getTime()).toBe(reset.getTime());
     expect(await requeueStoppedGeminiRewrites(sql, stopped)).toBe(0);
+  });
+
+  it("parks one rewrite per leftover demo draft until the Gemini pause ends", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      SOURCE,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    const stub = [
+      { role: "cover", kicker: "AI", headline: "Judul demo yang lama", body: "Satu kalimat pembuka." },
+    ];
+    await seedPair(sql, {
+      topicId: DEMO_TOPIC,
+      draftId: DEMO_DRAFT,
+      status: "needs_review",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "stubA",
+    });
+    await sql.rows("update drafts set slides = $1::jsonb where id = $2", [JSON.stringify(stub), DEMO_DRAFT]);
+    await seedPair(sql, {
+      topicId: OTHER_TOPIC,
+      draftId: OTHER_DRAFT,
+      status: "needs_review",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "realB",
+    });
+    const now = new Date("2026-10-30T07:00:00Z");
+    const until = new Date("2026-10-31T06:59:59.687Z");
+    await recordGeminiPause(sql, now, until.getTime() - now.getTime(), {
+      perDay: true,
+      kind: "day",
+      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+      limit: "500",
+    });
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, finished_at, attempts, error, manual)
+       values ($1, 'copywriter.write', $2::jsonb, $3, $3, 1, 'naskah tidak valid', true)`,
+      [
+        "11111111-1111-4111-8111-111111111111",
+        JSON.stringify({ topicId: DEMO_TOPIC, regenerateDemo: true }),
+        now,
+      ],
+    );
+    expect(await requeuePlaceholderRewrites(sql, now)).toBe(1);
+    const queued = await sql.rows<{
+      manual: boolean;
+      run_at: Date | string;
+      payload: { topicId?: string; regenerateDemo?: boolean };
+      attempts: number;
+    }>("select manual, run_at, payload, attempts from jobs where finished_at is null");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.manual).toBe(true);
+    expect(queued[0]?.attempts).toBe(0);
+    expect(queued[0]?.payload).toMatchObject({ topicId: DEMO_TOPIC, regenerateDemo: true });
+    const runAt = queued[0]?.run_at instanceof Date ? queued[0].run_at : new Date(String(queued[0]?.run_at));
+    expect(runAt.toISOString()).toBe(until.toISOString());
+    expect(await requeuePlaceholderRewrites(sql, now)).toBe(0);
+
+    const openTopic = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3";
+    const openDraft = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3";
+    await seedPair(sql, {
+      topicId: openTopic,
+      draftId: openDraft,
+      status: "needs_review",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "openC",
+    });
+    await sql.rows("update drafts set slides = $1::jsonb where id = $2", [JSON.stringify(stub), openDraft]);
+    await sql.rows(
+      `insert into jobs (id, name, payload, run_at, manual)
+       values ($1, 'copywriter.write', $2::jsonb, $3, true)`,
+      ["22222222-2222-4222-8222-222222222222", JSON.stringify({ topicId: openTopic, regenerateDemo: true }), until],
+    );
+    expect(await requeuePlaceholderRewrites(sql, now)).toBe(0);
+    const openJobs = await sql.rows<{ id: string }>(
+      "select id from jobs where finished_at is null and payload->>'topicId' = $1",
+      [openTopic],
+    );
+    expect(openJobs).toHaveLength(1);
   });
 });

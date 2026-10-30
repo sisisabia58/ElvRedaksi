@@ -10,7 +10,7 @@ import {
   recordGeminiPause,
   withGeminiSql,
 } from "../src/llm/gemini-gate";
-import { GEMINI_DEFAULT_MODEL, GeminiLlm, createLlm, llmBanner } from "../src/llm/provider";
+import { GEMINI_DEFAULT_MODEL, GeminiLlm, createLlm, llmBanner, studioModelLine } from "../src/llm/provider";
 
 const ENV_KEYS = [
   "LLM_PROVIDER",
@@ -63,6 +63,9 @@ describe("gemini provider", () => {
     setEnv("LLM_PROVIDER", "openai");
     setEnv("OPENAI_MODEL", "gpt-4o-mini");
     expect(llmBanner().text).toBe("AI aktif: OpenAI, model gpt-4o-mini.");
+    const gemini = `AI aktif: Gemini, model ${GEMINI_DEFAULT_MODEL}.`;
+    expect(studioModelLine(gemini, "Kuota Gemini habis, lanjut otomatis pukul 13:59 WIB, 31 Okt")).toBeNull();
+    expect(studioModelLine(gemini, null)).toBe(gemini);
   });
 
   it("posts structured JSON to the Gemini API and prices tokens", async () => {

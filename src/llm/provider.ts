@@ -108,6 +108,11 @@ export type LlmBanner = {
   text: string;
 };
 
+/** While a daily Gemini pause is in effect, the studio shows that pause instead of "AI aktif". */
+export function studioModelLine(banner: string, pause: string | null): string | null {
+  return pause ? null : banner;
+}
+
 export function llmBanner(): LlmBanner {
   const raw = process.env.LLM_PROVIDER ?? "demo";
   if (raw === "openai") {
