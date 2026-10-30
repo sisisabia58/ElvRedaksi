@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeKicker } from "../domain/tags";
+import { fitSlideBody } from "../render/fit-body";
 
 export type Slide = {
   role: "cover" | "point" | "cta";
@@ -19,7 +20,7 @@ const slideSchema = z.object({
   role: z.enum(["cover", "point", "cta"]),
   kicker: z.string(),
   headline: z.string().min(8).max(120),
-  body: z.string().min(1).max(280),
+  body: z.string().min(1).max(1600),
 });
 
 const hashtagSchema = z.string().regex(/^[a-z0-9]+$/);
@@ -104,7 +105,7 @@ export function parseCopy(text: string, sourceName: string): DraftCopy {
     slides.push({
       ...slideResult.data,
       kicker: normalizeKicker(slideResult.data.kicker),
-      body: stripTrailingSource(slideResult.data.body, sourceName),
+      body: fitSlideBody(stripTrailingSource(slideResult.data.body, sourceName)).text,
     });
   }
 

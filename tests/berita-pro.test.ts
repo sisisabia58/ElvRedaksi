@@ -7,10 +7,11 @@ import { COVER_NAVY, DEFAULT_ACCENT, PAPER } from "../src/domain/brand";
 import { contrastRatio } from "../src/domain/contrast";
 import { runDesigner } from "../src/jobs/handlers";
 import { PlaywrightRasterizer } from "../src/render/raster";
+import { fitSlideBody } from "../src/render/fit-body";
 import {
-  bodyMaxHeight,
   bodyPx,
   coverHeadlinePx,
+  innerChromeOverlaps,
   innerHeadlinePx,
   pageCounter,
   renderBeritaProHtml,
@@ -66,9 +67,20 @@ describe("berita pro", () => {
     expect(coverHeadlinePx("Kenapa harga beras naik?")).toBeGreaterThan(coverHeadlinePx(longHeadline));
     expect(innerHeadlinePx("Stok aman")).toBeGreaterThan(innerHeadlinePx(longHeadline));
     expect(bodyPx("Pendek.")).toBe(48);
-    expect(bodyPx("x".repeat(180))).toBe(48);
     expect(bodyPx("Pendek.")).toBeGreaterThan(bodyPx(longHeadline.repeat(2)));
-    expect(bodyPx("x".repeat(235))).toBeLessThan(44);
+    const kkpBody =
+      "Kementerian Kelautan dan Perikanan menargetkan pembangunan 2.000 Kampung Nelayan Merah Putih di seluruh Indonesia pada 2027. Sebanyak 169 calon lokasi di 16 kabupaten dan kota dipersiapkan di Sulawesi Tenggara.";
+    const fitted = fitSlideBody(kkpBody);
+    expect(fitted.text).toBe(kkpBody);
+    expect(fitted.text.endsWith(".")).toBe(true);
+    expect(fitted.size).toBeLessThan(48);
+    expect(fitted.size).toBeGreaterThanOrEqual(32);
+    const tooLong = `${"Kalimat pertama cukup panjang untuk mengisi beberapa baris pada slide isi berita. ".repeat(4)}Kalimat terakhir tidak muat.`;
+    const clamped = fitSlideBody(tooLong.trim());
+    expect(clamped.text.endsWith(".")).toBe(true);
+    expect(clamped.text.length).toBeLessThan(tooLong.trim().length);
+    expect(tooLong.trim().startsWith(clamped.text)).toBe(true);
+    expect(clamped.text).not.toMatch(/\bdi$/);
     expect(pageCounter(1, 3)).toBe("02 / 03");
 
     const cover = renderBeritaProHtml(
@@ -108,7 +120,9 @@ describe("berita pro", () => {
     expect(sourced).not.toContain("sepenuhnya. ANTARA Terkini");
     expect(sourced).toContain("Sumber: ANTARA Terkini");
     expect(sourced).toContain("line-height:1.48");
-    expect(sourced).toContain(`max-height:${bodyMaxHeight(bodyPx("Pasokan domestik sudah tercukupi sepenuhnya."))}px`);
+    expect(sourced).toContain('data-slide-body="1"');
+    expect(sourced).not.toMatch(/data-slide-body="1"[^>]*overflow/);
+    expect(sourced).not.toMatch(/data-slide-body="1"[^>]*max-height/);
     expect(sourced).not.toContain("max-height:742px");
     const mark = wordmarkBox();
     expect(mark.top).toBeLessThan(0);
@@ -126,6 +140,25 @@ describe("berita pro", () => {
     });
     expect(middle).toContain("02 / 03");
     expect(middle).toContain("GESER →");
+    expect(middle).toContain("left:72px;bottom:132px");
+    expect(middle).not.toContain("bottom:52px");
+    expect(innerChromeOverlaps()).toBe(false);
+    const magelang = renderBeritaProHtml(
+      slideInput(0, {
+        slide: { ...slides[0], headline: "Pertanian Perkotaan Magelang" },
+      }),
+    );
+    expect(magelang).toContain("line-height:1.25");
+    expect(magelang).toContain('data-cover-headline="1"');
+    expect(magelang).not.toMatch(/data-cover-headline="1"[^>]*overflow:\s*hidden/);
+    const kkpHtml = renderBeritaProHtml(
+      slideInput(1, {
+        slide: { ...slides[1], body: kkpBody + " (ANTARA Terkini)" },
+        sourceName: "ANTARA Terkini",
+      }),
+    );
+    expect(kkpHtml).toContain("Sulawesi Tenggara.");
+    expect(kkpHtml).not.toContain("dipersiapkan di</");
     expect(middle).toContain("Sumber: ANTARA");
     expect(middle).not.toContain("Baca selengkapnya");
     expect(last).toContain("03 / 03");

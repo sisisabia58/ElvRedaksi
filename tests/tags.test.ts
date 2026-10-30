@@ -14,8 +14,13 @@ describe("categories", () => {
   it("title-cases the slide category the review page shows", () => {
     expect(normalizeKicker("EKspansi Global")).toBe("Ekspansi Global");
     expect(normalizeKicker("ANTARA Terkini")).toBe("Antara Terkini");
-    expect(normalizeKicker("INFO LINGKUNGAN")).toBe("Info Lingkungan");
+    expect(normalizeKicker("INFO LINGKUNGAN")).toBe("INFO Lingkungan");
     expect(normalizeKicker("AI")).toBe("AI");
+    expect(normalizeKicker("UMKM BANTUL")).toBe("UMKM Bantul");
+    expect(normalizeKicker("Umkm Bantul")).toBe("UMKM Bantul");
+    expect(normalizeKicker("KKP")).toBe("KKP");
+    expect(normalizeCategory("dpr dan bumn")).toBe("DPR Dan BUMN");
+    expect(normalizeCategory("dolar as")).toBe("Dolar As");
   });
 
   it("normalizes tags that come back from the model", () => {

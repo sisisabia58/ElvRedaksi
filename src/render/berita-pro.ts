@@ -2,6 +2,7 @@ import { stripTrailingSource, type Slide } from "../agents/copywriter";
 import { COVER_NAVY, PAPER, SLATE, safeAccent } from "../domain/brand";
 import { contrastRatio, onAccentText } from "../domain/contrast";
 import { SLIDE_HEIGHT, SLIDE_WIDTH } from "../domain/constants";
+import { fitSlideBody } from "./fit-body";
 import { fontFaceCss } from "./fonts";
 
 const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
@@ -46,30 +47,35 @@ export function innerHeadlinePx(headline: string): number {
 }
 
 const BODY_LINE_HEIGHT = 1.48;
-const BODY_MAX_LINES = 6;
 
 export function bodyPx(body: string): number {
-  const chars = Math.max(body.trim().length, 1);
-  const width = 860;
-  const linesAt = (size: number) => {
-    const charsPerLine = Math.max(12, Math.floor(width / (size * 0.5)));
-    return Math.ceil(chars / charsPerLine);
-  };
-  for (const size of [48, 46, 44]) {
-    if (linesAt(size) <= BODY_MAX_LINES) {
-      return size;
-    }
-  }
-  for (let size = 42; size >= 32; size -= 2) {
-    if (linesAt(size) <= BODY_MAX_LINES) {
-      return size;
-    }
-  }
-  return 32;
+  return fitSlideBody(body).size;
 }
 
-export function bodyMaxHeight(size: number): number {
-  return Math.round(size * BODY_LINE_HEIGHT * BODY_MAX_LINES);
+export const INNER_SWIPE = { left: 72, bottom: 132, width: 220, height: 70 };
+export const NUMERAL_INK = { right: 28, bottom: 0, width: 360, height: 280 };
+
+export function boxesOverlap(
+  a: { left: number; top: number; right: number; bottom: number },
+  b: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+export function innerChromeOverlaps(): boolean {
+  const swipe = {
+    left: INNER_SWIPE.left,
+    right: INNER_SWIPE.left + INNER_SWIPE.width,
+    top: SLIDE_HEIGHT - INNER_SWIPE.bottom - INNER_SWIPE.height,
+    bottom: SLIDE_HEIGHT - INNER_SWIPE.bottom,
+  };
+  const numeral = {
+    left: SLIDE_WIDTH - NUMERAL_INK.right - NUMERAL_INK.width,
+    right: SLIDE_WIDTH - NUMERAL_INK.right,
+    top: SLIDE_HEIGHT - NUMERAL_INK.bottom - NUMERAL_INK.height,
+    bottom: SLIDE_HEIGHT - NUMERAL_INK.bottom,
+  };
+  return boxesOverlap(swipe, numeral);
 }
 
 export function pageCounter(index: number, total: number): string {
@@ -141,7 +147,7 @@ function photoPanel(input: BeritaProInput, accent: string): string {
        ${photoCredit(input.sourceName)}`
     : `<div style="position:absolute;inset:0;background:${COVER_NAVY};"></div>
        <div style="position:absolute;inset:0;background-image:radial-gradient(${accent} 1.5px, transparent 1.7px);background-size:16px 16px;opacity:0.55;"></div>
-       <div style="position:absolute;left:48px;right:180px;bottom:56px;font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:78px;line-height:0.92;letter-spacing:-0.04em;color:${accent};overflow:hidden;max-height:180px;">${escapeHtml(input.slide.kicker || input.sourceName)}</div>`;
+       <div style="position:absolute;left:48px;right:180px;bottom:56px;font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:78px;line-height:1.15;letter-spacing:-0.04em;color:${accent};">${escapeHtml(input.slide.kicker || input.sourceName)}</div>`;
   return `<div style="position:absolute;left:0;right:0;bottom:0;height:810px;overflow:hidden;">
     ${art}
     <div style="position:absolute;left:0;right:0;top:0;height:160px;background:linear-gradient(${COVER_NAVY}, transparent);z-index:2;"></div>
@@ -160,12 +166,12 @@ function swipePill(accent: string, filled: boolean): string {
 function renderCover(input: BeritaProInput, accent: string): string {
   const px = coverHeadlinePx(input.slide.headline);
   return `
-    <div style="position:relative;z-index:4;padding:48px 72px 0;max-height:520px;overflow:hidden;box-sizing:border-box;">
+    <div style="position:relative;z-index:4;padding:48px 72px 0;box-sizing:border-box;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;min-height:96px;">
         <div style="font-family:Inter,sans-serif;font-weight:700;font-size:22px;letter-spacing:0.16em;text-transform:uppercase;color:#FFFFFF;padding-top:18px;overflow:hidden;max-width:520px;white-space:nowrap;">${escapeHtml(input.slide.kicker)}</div>
         ${logoMark(input.logoDataUrl, input.initial ?? "A", accent, WORDMARK_PX)}
       </div>
-      <div style="margin-top:28px;font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:${px}px;line-height:0.98;letter-spacing:-0.035em;color:#FFFFFF;max-height:300px;overflow:hidden;">${escapeHtml(input.slide.headline)}</div>
+      <div data-cover-headline="1" style="margin-top:28px;font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:${px}px;line-height:1.25;letter-spacing:-0.035em;color:#FFFFFF;padding-bottom:0.08em;">${escapeHtml(input.slide.headline)}</div>
       <div style="margin-top:32px;">${swipePill(accent, true)}</div>
     </div>
     ${photoPanel(input, accent)}`;
@@ -174,7 +180,8 @@ function renderCover(input: BeritaProInput, accent: string): string {
 function renderInner(input: BeritaProInput, accent: string): string {
   const last = input.index === input.total - 1;
   const headlineSize = innerHeadlinePx(input.slide.headline);
-  const bodySize = bodyPx(input.slide.body);
+  const fitted = fitSlideBody(input.slide.body);
+  const bodySize = fitted.size;
   const handle = input.handle.trim();
   const cta = last
     ? `<div style="margin-top:14px;font-family:Jakarta,Inter,sans-serif;font-weight:700;font-size:28px;line-height:1.25;color:${COVER_NAVY};">Baca selengkapnya di link bio</div>${
@@ -185,7 +192,7 @@ function renderInner(input: BeritaProInput, accent: string): string {
     : "";
   const pill = last
     ? ""
-    : `<div style="position:absolute;right:56px;bottom:52px;z-index:4;">${swipePill(accent, false)}</div>`;
+    : `<div style="position:absolute;left:${INNER_SWIPE.left}px;bottom:${INNER_SWIPE.bottom}px;z-index:4;">${swipePill(accent, false)}</div>`;
   return `
     <div style="position:relative;z-index:2;height:100%;padding:56px 72px 230px;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;">
@@ -196,9 +203,9 @@ function renderInner(input: BeritaProInput, accent: string): string {
         </div>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;overflow:hidden;">
-        <div style="font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:${headlineSize}px;line-height:1.05;letter-spacing:-0.03em;color:${COVER_NAVY};max-height:220px;overflow:hidden;">${escapeHtml(input.slide.headline)}</div>
+        <div style="font-family:Jakarta,Inter,sans-serif;font-weight:800;font-size:${headlineSize}px;line-height:1.2;letter-spacing:-0.03em;color:${COVER_NAVY};padding-bottom:0.06em;">${escapeHtml(input.slide.headline)}</div>
         <div style="width:84px;height:8px;background:${accent};margin:28px 0 28px;flex:0 0 auto;"></div>
-        <div style="font-family:Inter,sans-serif;font-weight:400;font-size:${bodySize}px;line-height:${BODY_LINE_HEIGHT};color:${COVER_NAVY};max-width:860px;max-height:${bodyMaxHeight(bodySize)}px;overflow:hidden;">${escapeHtml(input.slide.body)}</div>
+        <div data-slide-body="1" style="font-family:Inter,sans-serif;font-weight:400;font-size:${bodySize}px;line-height:${BODY_LINE_HEIGHT};color:${COVER_NAVY};max-width:860px;">${escapeHtml(fitted.text)}</div>
       </div>
     </div>
     <div style="position:absolute;left:72px;bottom:64px;right:300px;z-index:4;">

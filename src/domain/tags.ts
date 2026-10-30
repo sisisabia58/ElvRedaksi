@@ -1,35 +1,70 @@
+const KNOWN_ACRONYMS = new Set([
+  "UMKM",
+  "KKP",
+  "KNMP",
+  "DPR",
+  "BUMN",
+  "DPD",
+  "KPK",
+  "OJK",
+  "BPJS",
+  "TNI",
+  "POLRI",
+  "WHO",
+  "PBB",
+  "ASEAN",
+  "IMF",
+  "OECD",
+  "NKRI",
+  "KPU",
+  "MK",
+  "PLN",
+  "BPN",
+  "ATR",
+]);
+
+function coreLetters(word: string): string {
+  return word.replace(/[^0-9A-Za-z\u00C0-\u024F]/g, "");
+}
+
+function withCore(word: string, core: string): string {
+  const match = word.match(/^([^0-9A-Za-z\u00C0-\u024F]*)([0-9A-Za-z\u00C0-\u024F]+)(.*)$/);
+  if (!match) {
+    return word;
+  }
+  return `${match[1]}${core}${match[3]}`;
+}
+
+function canonicalWord(word: string): string {
+  const letters = coreLetters(word);
+  if (!letters) {
+    return word;
+  }
+  const upper = letters.toLocaleUpperCase("id");
+  if (KNOWN_ACRONYMS.has(upper)) {
+    return withCore(word, upper);
+  }
+  if (letters.length <= 4 && letters === upper) {
+    return word;
+  }
+  const lower = letters.toLocaleLowerCase("id");
+  const titled = lower.charAt(0).toLocaleUpperCase("id") + lower.slice(1);
+  return withCore(word, titled);
+}
+
 export function normalizeCategory(raw: string): string {
   const trimmed = raw.trim().replace(/\s+/g, " ");
   if (!trimmed) {
     return "";
   }
-  return trimmed
-    .split(" ")
-    .map((word) => {
-      const letters = word.replace(/[^0-9A-Za-z\u00C0-\u024F]/g, "");
-      if (letters.length > 0 && letters.length <= 4 && letters === letters.toLocaleUpperCase("id")) {
-        return word;
-      }
-      const lower = word.toLocaleLowerCase("id");
-      return lower.charAt(0).toLocaleUpperCase("id") + lower.slice(1);
-    })
-    .join(" ");
+  return trimmed.split(" ").map(canonicalWord).join(" ");
 }
 
-function titleCaseWord(word: string): string {
-  const lower = word.toLocaleLowerCase("id");
-  return lower.charAt(0).toLocaleUpperCase("id") + lower.slice(1);
-}
-
-/** Slide category line. A fully shouted phrase becomes title case; a short acronym such as AI stays. */
+/** Slide category line. A shouted phrase becomes title case; acronyms stay uppercase. */
 export function normalizeKicker(raw: string): string {
   const trimmed = raw.trim().replace(/\s+/g, " ");
   if (!trimmed) {
     return "";
-  }
-  const letters = trimmed.replace(/[^0-9A-Za-z\u00C0-\u024F]/g, "");
-  if (letters.length > 4 && letters === letters.toLocaleUpperCase("id")) {
-    return trimmed.split(" ").map(titleCaseWord).join(" ");
   }
   return normalizeCategory(trimmed);
 }

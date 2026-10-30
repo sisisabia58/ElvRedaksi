@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCopy, stripTrailingSource } from "../src/agents/copywriter";
+import { copySystem } from "../src/agents/prompts";
+import { slideBodyCharBudget } from "../src/render/fit-body";
 import { DemoLlm } from "../src/llm/provider";
 import { createTestSql } from "../src/db/client";
 import { seedDefaults } from "../src/db/seed";
@@ -31,6 +33,32 @@ describe("copywriter", () => {
     );
     expect(copy.slides[0]?.kicker).toBe("Ekspansi Global");
     expect(copy.slides[1]?.kicker).toBe("Fakta");
+    const acronym = parseCopy(
+      JSON.stringify({
+        ...good,
+        slides: good.slides.map((slide, index) =>
+          index === 0 ? { ...slide, kicker: "UMKM BANTUL" } : slide,
+        ),
+      }),
+      "Contoh",
+    );
+    expect(acronym.slides[0]?.kicker).toBe("UMKM Bantul");
+    const budget = slideBodyCharBudget();
+    expect(copySystem("Brain.", { slideCount: 3 })).toContain(String(budget));
+    expect(copySystem("Brain.", { slideCount: 3 })).toContain("akhir kalimat");
+    const sentence = "Kalimat pertama cukup panjang untuk mengisi beberapa baris pada slide isi berita. ";
+    const crowded = parseCopy(
+      JSON.stringify({
+        ...good,
+        slides: good.slides.map((slide, index) =>
+          index === 1 ? { ...slide, body: `${sentence.repeat(4)}Kalimat terakhir tidak muat.` } : slide,
+        ),
+      }),
+      "Contoh",
+    );
+    expect(crowded.slides[1]?.body.endsWith(".")).toBe(true);
+    expect(crowded.slides[1]?.body).not.toMatch(/\bdi$/);
+    expect(crowded.slides[1]?.body.length).toBeLessThan(sentence.repeat(4).length);
   });
 
   it("strips hash marks and casing from hashtags", () => {
