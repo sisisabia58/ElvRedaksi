@@ -4,7 +4,8 @@ import { can } from "@/src/auth/rbac";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { relativeId } from "@/src/domain/metrics";
 import { greeting, isWithinWorkHours } from "@/src/domain/time";
-import { agentCards, funnelCounts, recentActivity, type AgentId } from "@/src/studio/overview";
+import { readGeminiPause } from "@/src/llm/gemini-gate";
+import { agentCards, funnelCounts, overviewStatusChip, recentActivity, type AgentId } from "@/src/studio/overview";
 import { OverviewScanButton } from "./overview-scan-button";
 
 const AGENT_PRESENTATION: Record<AgentId, { label: string; color: string }> = {
@@ -28,13 +29,14 @@ function agentLabel(agent: string): { label: string; color: string } {
 export default async function OverviewPage() {
   const sql = await getAppSql();
   const now = new Date();
-  const [funnel, cards, activity, hourRows] = await Promise.all([
+  const [funnel, cards, activity, hourRows, geminiPause] = await Promise.all([
     funnelCounts(sql, now),
     agentCards(sql, now),
     recentActivity(sql),
     sql.rows<{ work_start: string; work_end: string }>(
       "select work_start, work_end from brand where id = 1",
     ),
+    readGeminiPause(sql),
   ]);
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -46,7 +48,13 @@ export default async function OverviewPage() {
   const greetingWord = greeting(now).toUpperCase();
   const name = user?.name.trim().toUpperCase() ?? "";
   const kicker = name ? `SELAMAT ${greetingWord}, ${name}` : `SELAMAT ${greetingWord}`;
-  const hoursChip = `${awake ? "AI aktif" : "AI tidur"} · jam kerja ${workStart}–${workEnd} WIB`;
+  const quotaPaused = Boolean(geminiPause?.perDay);
+  const hoursChip = overviewStatusChip({
+    awake,
+    workStart,
+    workEnd,
+    geminiPause: quotaPaused ? geminiPause?.message ?? null : null,
+  });
 
   return (
     <div className="p-6 md:p-8 space-y-8">
@@ -62,7 +70,13 @@ export default async function OverviewPage() {
             <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
               Mode: Semi-otomatis
             </span>
-            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
+            <span
+              className={`rounded-full border px-3 py-1 text-xs ${
+                quotaPaused
+                  ? "border-amber-500/60 bg-amber-500/10 text-amber-100"
+                  : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]"
+              }`}
+            >
               {hoursChip}
             </span>
           </div>

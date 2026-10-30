@@ -283,6 +283,15 @@ describe("gemini gate", () => {
     }
 
     setEnv("GEMINI_API_KEY", "test-key");
+    // complete() reads the wall clock. The fixture pause above ends at 14:04 WIB
+    // on 30 Oct, so extend it before asking the client to honour the gate.
+    await recordGeminiPause(sql, new Date(), 48 * 60 * 60 * 1000, {
+      perDay: true,
+      kind: "day",
+      metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+      limit: "500",
+    });
     let calls = 0;
     const llm = new GeminiLlm(async () => {
       calls += 1;

@@ -51,6 +51,7 @@ export default async function ReviewPage({
       sourceName: draft.sourceName,
       score: draft.score,
       sensitive: draft.sensitive,
+      awaitingRewrite: draft.awaitingRewrite,
       handle: draft.handle,
       slideLabel: `1/${draft.slideCount}`,
       timeLabel: relativeId(draft.updatedAt, now),

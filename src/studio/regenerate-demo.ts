@@ -1,10 +1,9 @@
 import type { Sql } from "../db/client";
+import { PLACEHOLDER_BODY } from "../domain/placeholder";
 import { enqueue } from "../jobs/runner";
 import { readGeminiPause } from "../llm/gemini-gate";
 
 const DEMO_SCORE_REASON = "%(demo)";
-
-const DEMO_STUB = "Satu kalimat pembuka.";
 
 export type DemoRewriteSnapshot = {
   demoScores: number;
@@ -40,7 +39,7 @@ export async function demoRewriteSnapshot(sql: Sql): Promise<DemoRewriteSnapshot
          select count(*)::int from cohort c
          where position($1 in c.slides::text) = 0
        ) as done`,
-    [DEMO_STUB],
+    [PLACEHOLDER_BODY],
   );
   const row = rows[0];
   return {

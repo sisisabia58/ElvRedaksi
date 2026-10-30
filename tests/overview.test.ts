@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTestSql } from "../src/db/client";
-import { funnelCounts } from "../src/studio/overview";
+import { funnelCounts, overviewStatusChip } from "../src/studio/overview";
 
 const SOURCE_ID = "11111111-1111-1111-1111-111111111111";
 const TOPIC_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
@@ -39,6 +39,26 @@ async function seedPostedDrafts(sql: Awaited<ReturnType<typeof createTestSql>>) 
 }
 
 describe("overview funnel", () => {
+  it("shows the Gemini quota pause instead of AI aktif", () => {
+    const pause = "Kuota Gemini habis, lanjut otomatis pukul 13:59 WIB, 31 Okt";
+    expect(
+      overviewStatusChip({
+        awake: true,
+        workStart: "07:00",
+        workEnd: "22:00",
+        geminiPause: pause,
+      }),
+    ).toBe(pause);
+    expect(
+      overviewStatusChip({
+        awake: true,
+        workStart: "07:00",
+        workEnd: "22:00",
+        geminiPause: null,
+      }),
+    ).toBe("AI aktif · jam kerja 07:00–22:00 WIB");
+  });
+
   it("counts posted drafts only within the current Jakarta week, end exclusive", async () => {
     const sql = await createTestSql();
     await seedPostedDrafts(sql);

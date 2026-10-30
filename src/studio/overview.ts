@@ -11,6 +11,18 @@ export type Funnel = {
   postedThisWeek: number;
 };
 
+export function overviewStatusChip(input: {
+  awake: boolean;
+  workStart: string;
+  workEnd: string;
+  geminiPause: string | null;
+}): string {
+  if (input.geminiPause) {
+    return input.geminiPause;
+  }
+  return `${input.awake ? "AI aktif" : "AI tidur"} · jam kerja ${input.workStart}–${input.workEnd} WIB`;
+}
+
 export async function funnelCounts(sql: Sql, now: Date = new Date()): Promise<Funnel> {
   const rows = await sql.rows<{
     arrived24h: string;

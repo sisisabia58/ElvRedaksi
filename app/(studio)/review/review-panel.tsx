@@ -17,6 +17,7 @@ export type ReviewCardView = {
   sourceName: string;
   score: number | null;
   sensitive: boolean;
+  awaitingRewrite: boolean;
   handle: string;
   slideLabel: string;
   timeLabel: string;
@@ -86,7 +87,11 @@ export function ReviewPanel({
   const selectedIds = [...selected];
   const selectedCards = cards.filter((card) => selected.has(card.id));
   const bulkAllows = (action: "approve" | "schedule" | "reject") =>
-    selectedCards.every((card) => reviewActionVisible(card.status, action));
+    selectedCards.every((card) => {
+      if (!reviewActionVisible(card.status, action)) return false;
+      if ((action === "approve" || action === "schedule") && card.awaitingRewrite) return false;
+      return true;
+    });
 
   return (
     <div className="p-6 md:p-8 space-y-6 pb-28">
@@ -178,6 +183,11 @@ export function ReviewPanel({
                     {card.sensitive ? (
                       <Badge variant="outline" className="border-amber-500/50 text-amber-200">
                         Cek risiko
+                      </Badge>
+                    ) : null}
+                    {card.awaitingRewrite ? (
+                      <Badge variant="outline" className="border-amber-500/50 text-amber-200">
+                        menunggu tulis ulang
                       </Badge>
                     ) : null}
                   </div>

@@ -1,6 +1,7 @@
 import type { Slide } from "../agents/copywriter";
 import { can, type Role } from "../auth/rbac";
 import type { Sql } from "../db/client";
+import { draftAwaitsRewrite } from "../domain/placeholder";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { slidesForFormat, type SlideTemplate } from "../render/html";
 import { enqueue } from "../jobs/runner";
@@ -41,6 +42,7 @@ export type DraftCard = {
   assetId: string | null;
   slideCount: number;
   handle: string;
+  awaitingRewrite: boolean;
 };
 
 export type DraftDetail = {
@@ -126,6 +128,12 @@ function requireReviewWrite(role: Role): void {
 function requirePublish(role: Role): void {
   if (!can(role, "publish")) {
     throw new Error("forbidden");
+  }
+}
+
+function blockIfPlaceholder(slides: Slide[]): void {
+  if (draftAwaitsRewrite(slides)) {
+    throw new Error("Draf masih menunggu tulis ulang.");
   }
 }
 
@@ -252,6 +260,7 @@ export async function listDrafts(sql: Sql, status: DraftStatus): Promise<DraftCa
       assetId: row.asset_id,
       slideCount,
       handle: row.handle,
+      awaitingRewrite: draftAwaitsRewrite(slides),
     };
   });
 }
@@ -482,6 +491,7 @@ export async function approveDraftInTx(tx: Sql, role: Role, id: string): Promise
   requirePublish(role);
   const row = await loadDraftRow(tx, id);
   blockIfDirty(row.text_dirty);
+  blockIfPlaceholder(parseSlides(row.slides));
   assertTransition("human", row.status, "approved");
   const updated = await tx.rows<{ id: string }>(
     `update drafts set status = 'approved', updated_at = now()
@@ -521,6 +531,7 @@ export async function scheduleDraftInTx(
   requirePublish(role);
   const row = await loadDraftRow(tx, id);
   blockIfDirty(row.text_dirty);
+  blockIfPlaceholder(parseSlides(row.slides));
   if (scheduledAt.getTime() <= Date.now()) {
     throw new Error("Jadwal harus di masa depan");
   }
@@ -611,6 +622,7 @@ export async function postDraftNow(sql: Sql, role: Role, id: string): Promise<vo
   requirePublish(role);
   const row = await loadDraftRow(sql, id);
   blockIfDirty(row.text_dirty);
+  blockIfPlaceholder(parseSlides(row.slides));
   const now = new Date();
   if (row.status === "needs_review") {
     assertTransition("human", "needs_review", "approved");
@@ -625,6 +637,7 @@ export async function postDraftNow(sql: Sql, role: Role, id: string): Promise<vo
 export async function markPostedManually(sql: Sql, role: Role, id: string): Promise<void> {
   requirePublish(role);
   const row = await loadDraftRow(sql, id);
+  blockIfPlaceholder(parseSlides(row.slides));
   assertTransition("human", row.status, "posted", true);
   const now = new Date();
   await sql.tx(async (tx) => {
@@ -725,6 +738,7 @@ export async function retryFailed(sql: Sql, role: Role, id: string): Promise<voi
   requirePublish(role);
   const row = await loadDraftRow(sql, id);
   blockIfDirty(row.text_dirty);
+  blockIfPlaceholder(parseSlides(row.slides));
   assertTransition("human", row.status, "posting");
   const now = new Date();
   await sql.tx(async (tx) => {

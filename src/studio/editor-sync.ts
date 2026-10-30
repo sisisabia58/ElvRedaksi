@@ -1,6 +1,9 @@
 import type { Slide } from "../agents/copywriter";
 import type { SlideTemplateName } from "../domain/brand";
+import { draftAwaitsRewrite } from "../domain/placeholder";
 import { slidesForFormat, type SlideFormatOptions } from "../render/pick";
+
+export { draftAwaitsRewrite };
 
 export type DraftFormat = "carousel_full" | "teaser_bio";
 
@@ -137,8 +140,10 @@ export function editorPublishBlocked(input: {
   hasUnsavedTextEdits: boolean;
   savedFocal: number;
   sliderFocal: number;
+  awaitingRewrite?: boolean;
 }): boolean {
   return (
+    Boolean(input.awaitingRewrite) ||
     input.textDirty ||
     input.hasUnsavedTextEdits ||
     focalSliderIsUnsaved(input.savedFocal, input.sliderFocal)

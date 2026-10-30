@@ -736,5 +736,55 @@ describe("review", () => {
         sliderFocal: 50,
       }),
     ).toBe(true);
+    expect(
+      editorPublishBlocked({
+        textDirty: false,
+        hasUnsavedTextEdits: false,
+        savedFocal: 50,
+        sliderFocal: 50,
+        awaitingRewrite: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps placeholder copy in review and refuses approval", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      "11111111-1111-1111-1111-111111111111",
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+      "11111111-1111-1111-1111-111111111111",
+      "Demo",
+      "https://news.example/demo",
+    ]);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, text_dirty)
+       values ($1,$2,'needs_review','carousel_full','berita_pro',$3::jsonb,'cap','[]'::jsonb,'[]'::jsonb,'demo1',false)`,
+      [
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+        JSON.stringify([
+          { role: "cover", kicker: "AI", headline: "Judul demo yang lama", body: "Satu kalimat pembuka." },
+        ]),
+      ],
+    );
+    const listed = await listDrafts(sql, "needs_review");
+    expect(listed[0]?.awaitingRewrite).toBe(true);
+    await expect(approveDraft(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1")).rejects.toThrow(
+      /menunggu tulis ulang/,
+    );
+    await expect(
+      scheduleDraft(sql, "admin", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", new Date("2026-11-02T02:00:00Z")),
+    ).rejects.toThrow(/menunggu tulis ulang/);
+    const still = await sql.rows<{ status: string }>(
+      "select status from drafts where id = $1",
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"],
+    );
+    expect(still[0]?.status).toBe("needs_review");
   });
 });

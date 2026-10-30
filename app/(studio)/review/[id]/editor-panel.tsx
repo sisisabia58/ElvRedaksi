@@ -10,6 +10,7 @@ import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studi
 import {
   adoptServerDraft,
   clampedFocal,
+  draftAwaitsRewrite,
   editorPublishBlocked,
   editorTextFields,
   focalSliderIsUnsaved,
@@ -322,11 +323,13 @@ export function EditorPanel({
     run(() => saveFocalAction(draft.id, value));
   }
 
+  const awaitsRewrite = draftAwaitsRewrite(draft.slides);
   const publishBlocked = editorPublishBlocked({
     textDirty: draft.textDirty,
     hasUnsavedTextEdits,
     savedFocal: draft.focalY,
     sliderFocal: focalY,
+    awaitingRewrite: awaitsRewrite,
   });
 
   return (
@@ -447,7 +450,10 @@ export function EditorPanel({
 
           {posting ? <p className="text-sm text-amber-200">Draf sedang diposting</p> : null}
 
-          {publishBlocked ? (
+          {awaitsRewrite ? (
+            <p className="text-sm text-amber-200">Menunggu tulis ulang. Jangan setujui naskah demo.</p>
+          ) : null}
+          {publishBlocked && !awaitsRewrite ? (
             <p className="text-sm text-amber-200">Render dulu teks yang baru</p>
           ) : null}
 
