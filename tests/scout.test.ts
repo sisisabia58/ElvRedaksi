@@ -41,6 +41,11 @@ describe("scout", () => {
       <enclosure url="https://cdn.example/a.mp3" type="audio/mpeg"/>
       </item></channel></rss>`;
     expect(parseFeed(audio)[0]?.imageUrl).toBeNull();
+    const described = `<?xml version="1.0"?><rss><channel><item><title>Deskripsi</title>
+      <link>https://news.example/desc</link>
+      <description><![CDATA[<img src="https://img.antaranews.com/cache/800x533/a.jpg" /> Cuplikan foto.]]></description>
+      </item></channel></rss>`;
+    expect(parseFeed(described)[0]?.imageUrl).toBe("https://img.antaranews.com/cache/800x533/a.jpg");
     expect(
       imageUrlFromHtml(
         `<meta property="og:image" content="https://cdn.example/og.jpg"><img src="https://cdn.example/secret.jpg">`,
@@ -212,6 +217,66 @@ describe("scout", () => {
       },
     });
     expect(pageFetches).toBe(1);
+  });
+
+  it("fills a missing image on a known topic from the feed and does not refetch the article", async () => {
+    const sql = await createTestSql();
+    const sourceId = "11111111-1111-1111-1111-111111111111";
+    const topicId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
+    const draftId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      sourceId,
+      "ANTARA",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await sql.rows("insert into topics (id, source_id, title, url) values ($1,$2,$3,$4)", [
+      topicId,
+      sourceId,
+      "KKP",
+      "https://news.example/kkp",
+    ]);
+    await sql.rows(
+      `insert into drafts (id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code)
+       values ($1,$2,'needs_review','carousel_full','berita_pro','[]'::jsonb,'c','[]'::jsonb,'[]'::jsonb,'kkp01')`,
+      [draftId, topicId],
+    );
+    const feed = `<?xml version="1.0"?><rss><channel><item><title>KKP</title>
+      <link>https://news.example/kkp</link>
+      <enclosure url="https://cdn.example/kkp.jpg" type="image/jpeg"/>
+      <description>Cuplikan.</description></item></channel></rss>`;
+    let pageFetches = 0;
+    await runScout({
+      sql,
+      payload: {},
+      manual: true,
+      now: new Date("2026-10-30T02:00:00Z"),
+      fetchFeed: async () => feed,
+      fetchPage: async () => {
+        pageFetches += 1;
+        return "<p>tidak boleh diambil</p>";
+      },
+    });
+    expect(pageFetches).toBe(0);
+    const topics = await sql.rows<{ image_url: string }>("select image_url from topics where id = $1", [topicId]);
+    expect(topics[0]?.image_url).toBe("https://cdn.example/kkp.jpg");
+    const drafts = await sql.rows<{ text_dirty: boolean }>("select text_dirty from drafts where id = $1", [draftId]);
+    expect(drafts[0]?.text_dirty).toBe(true);
+    await runScout({
+      sql,
+      payload: {},
+      manual: true,
+      now: new Date("2026-10-30T03:00:00Z"),
+      fetchFeed: async () =>
+        feed.replace("https://cdn.example/kkp.jpg", "https://cdn.example/other.jpg"),
+      fetchPage: async () => {
+        pageFetches += 1;
+        return "";
+      },
+    });
+    const again = await sql.rows<{ image_url: string }>("select image_url from topics where id = $1", [topicId]);
+    expect(again[0]?.image_url).toBe("https://cdn.example/kkp.jpg");
+    expect(pageFetches).toBe(0);
   });
 
   it("deletes a source after topics have drafts", async () => {

@@ -59,6 +59,21 @@ export async function runScout(ctx: ScoutCtx): Promise<void> {
           [item.url],
         );
         if (known.length > 0) {
+          if (item.imageUrl && known[0]) {
+            const filled = await ctx.sql.rows<{ id: string }>(
+              `update topics set image_url = $1
+               where id = $2 and coalesce(image_url, '') = ''
+               returning id`,
+              [item.imageUrl, known[0].id],
+            );
+            if (filled[0]) {
+              await ctx.sql.rows(
+                `update drafts set text_dirty = true, updated_at = $1
+                 where topic_id = $2 and status in ('needs_review', 'drafted')`,
+                [ctx.now, known[0].id],
+              );
+            }
+          }
           continue;
         }
 

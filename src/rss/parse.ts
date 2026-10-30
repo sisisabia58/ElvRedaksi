@@ -161,6 +161,60 @@ function imageUrlFromItem(itemNodes: PreserveNode[]): string | null {
   return null;
 }
 
+const IMG_SRC = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/i;
+
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&apos;/g, "'");
+}
+
+function imageUrlFromTree(nodes: unknown): string | null {
+  if (typeof nodes === "string") {
+    const src = decodeXmlText(nodes).match(IMG_SRC)?.[1]?.trim();
+    return src ? validHttpUrl(src) : null;
+  }
+  if (Array.isArray(nodes)) {
+    for (const node of nodes) {
+      const found = imageUrlFromTree(node);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof nodes !== "object" || nodes === null) {
+    return null;
+  }
+  const record = nodes as PreserveNode;
+  if ("img" in record) {
+    const attrs = record[":@"];
+    if (attrs && typeof attrs === "object") {
+      const src = (attrs as Record<string, string>)["@_src"]?.trim();
+      const url = src ? validHttpUrl(decodeXmlText(src)) : null;
+      if (url) return url;
+    }
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (key === ":@") continue;
+    const found = imageUrlFromTree(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function imageUrlFromDescription(itemNodes: PreserveNode[]): string | null {
+  for (const tag of ["description", "content:encoded", "content"]) {
+    for (const node of itemNodes) {
+      if (typeof node !== "object" || node === null || !(tag in node)) {
+        continue;
+      }
+      const url = imageUrlFromTree(node[tag]);
+      if (url) return url;
+    }
+  }
+  return null;
+}
+
 function normalizeItemNodes(itemNodes: PreserveNode[]): FeedItem | null {
   const title = fieldFromItem(itemNodes, "title");
   if (!title) {
@@ -181,7 +235,13 @@ function normalizeItemNodes(itemNodes: PreserveNode[]): FeedItem | null {
     parseDateText(fieldFromItem(itemNodes, "pubDate")) ??
     parseDateText(fieldFromItem(itemNodes, "published")) ??
     parseDateText(fieldFromItem(itemNodes, "updated"));
-  return { title, url, publishedAt, summary, imageUrl: imageUrlFromItem(itemNodes) };
+  return {
+    title,
+    url,
+    publishedAt,
+    summary,
+    imageUrl: imageUrlFromItem(itemNodes) ?? imageUrlFromDescription(itemNodes),
+  };
 }
 
 function collectItemNodeLists(nodes: unknown, tag: string, out: PreserveNode[][]): void {
