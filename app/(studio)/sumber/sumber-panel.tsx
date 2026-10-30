@@ -114,7 +114,7 @@ export function SumberPanel({ sources }: { sources: SourceView[] }) {
               id="source-lang"
               value={lang}
               onChange={(e) => setLang(e.target.value as "ID" | "EN")}
-              className="flex h-9 w-full rounded-md border border-[var(--line)] bg-transparent px-3 py-1 text-sm"
+              className="flex h-9 w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-sm text-[var(--ink)]"
             >
               <option value="ID">Indonesia</option>
               <option value="EN">Inggris</option>
@@ -139,23 +139,31 @@ export function SumberPanel({ sources }: { sources: SourceView[] }) {
           {sources.map((source) => (
             <li key={source.id} className="p-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex gap-3 min-w-0 flex-1">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={source.enabled}
-                  aria-label={`Aktifkan ${source.name}`}
-                  disabled={pending}
-                  onClick={() => toggleEnabled(source.id, !source.enabled)}
-                  className={`mt-1 relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                    source.enabled ? "bg-[var(--accent)]" : "bg-[var(--line)]"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block size-5 rounded-full bg-white shadow transition-transform ${
-                      source.enabled ? "translate-x-5" : "translate-x-0"
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={source.enabled}
+                    aria-label={`${source.enabled ? "Matikan" : "Aktifkan"} ${source.name}`}
+                    disabled={pending}
+                    onClick={() => toggleEnabled(source.id, !source.enabled)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                      source.enabled ? "bg-[var(--accent)]" : "bg-[var(--line)]"
                     }`}
-                  />
-                </button>
+                  >
+                    <span
+                      data-switch-knob
+                      className={`pointer-events-none inline-block size-5 rounded-full shadow transition-transform ${
+                        source.enabled
+                          ? "translate-x-5 bg-[var(--bg)]"
+                          : "translate-x-0 bg-[var(--ink)]"
+                      }`}
+                    />
+                  </button>
+                  <span data-switch-label className="text-xs font-medium text-[var(--ink)]">
+                    {source.enabled ? "Aktif" : "Mati"}
+                  </span>
+                </div>
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium truncate">{source.name}</span>
@@ -173,7 +181,7 @@ export function SumberPanel({ sources }: { sources: SourceView[] }) {
               </div>
               <Button
                 type="button"
-                variant="outline"
+                variant="destructive"
                 size="sm"
                 disabled={pending}
                 onClick={() => {

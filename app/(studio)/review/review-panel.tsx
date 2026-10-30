@@ -120,7 +120,7 @@ export function ReviewPanel({
               className={`rounded-full border px-3 py-1 text-sm transition-colors ${
                 active
                   ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--ink)]"
-                  : "border-[var(--line)] text-[var(--muted)] hover:border-[var(--ink)]"
+                  : "border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] hover:border-[var(--ink)]"
               }`}
             >
               {tab.label} ({count})
@@ -133,9 +133,9 @@ export function ReviewPanel({
         <div>
           <Button
             type="button"
-            variant="outline"
+            variant={bulkMode ? "default" : "outline"}
             size="sm"
-            className="border-[var(--line)]"
+            aria-pressed={bulkMode}
             onClick={() => {
               setBulkMode((v) => !v);
               setSelected(new Set());
@@ -208,6 +208,7 @@ export function ReviewPanel({
             <>
               <Button
                 type="button"
+                variant="secondary"
                 disabled={pending || !bulkAllows("approve")}
                 onClick={() => run(() => bulkApproveAction(selectedIds))}
               >
@@ -234,9 +235,8 @@ export function ReviewPanel({
           {canWrite ? (
             <Button
               type="button"
-              variant="outline"
+              variant="destructive"
               disabled={pending || !bulkAllows("reject")}
-              className="border-[var(--line)]"
               onClick={() => run(() => bulkRejectAction(selectedIds))}
             >
               Tolak

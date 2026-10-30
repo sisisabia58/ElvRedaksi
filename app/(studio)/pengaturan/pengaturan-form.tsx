@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const fieldClass =
-  "h-8 w-full min-w-0 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 text-sm";
+  "h-8 w-full min-w-0 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 text-sm text-[var(--ink)]";
 
 function brandFromSettings(settings: Settings): SettingsInput {
   return {
@@ -392,7 +392,7 @@ export function PengaturanForm({
             type="file"
             accept="image/png,image/jpeg,image/webp"
             required
-            className="block w-full text-sm"
+            className="block w-full text-sm text-[var(--ink)] file:mr-3 file:rounded-lg file:border file:border-[var(--line)] file:bg-[var(--panel-2)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--ink)]"
           />
           {logoError ? (
             <p className="text-sm text-destructive" role="alert">

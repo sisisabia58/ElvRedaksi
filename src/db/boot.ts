@@ -12,6 +12,14 @@ import { DDL } from "./sql";
 const DEMO_EMAIL = "admin@redaksi.local";
 const DEMO_PASSWORD = "redaksi-dev-only";
 
+/** Local preview draft. Seeded only when SEED_DEMO=1 and not in production. */
+export const DEMO_REVIEW_DRAFT_ID = "00000000-0000-4000-8000-0000000000d1";
+
+const PREVIEW_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABQCAIAAAAm3eQSAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAvklEQVRoge2SAQkAURSD1sIAl8L+xS7GePzBAqgsfJ5e6gRMwHpFdiHvLnUCJmC9IruQd5c6AROwXpFdyLtLnYAJWK/ILuTdpU7ABKxXZBfy7lInYALWK7ILeXepEzAB6xXZhby71AmYgPWK7ELeXeoETMB6RXYh7y51AiZgvSK7kHeXOgETsF6RXci7S52ACVivyC7k3aVOwASsV2QX8u5SJ2AC1iuyC3l3qRMwAesV2YW8u9QJmID1irx8oR/VFPx5QhpsSwAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 const BOOT_JOBS: JobName[] = ["scout.scan", "insights.sync"];
 
 function isUniqueViolation(error: unknown): boolean {
@@ -35,11 +43,88 @@ export async function applyDdl(sql: Sql): Promise<void> {
   }
 }
 
+async function seedLocalPreview(sql: Sql): Promise<void> {
+  const sourceOn = "00000000-0000-4000-8000-0000000000a1";
+  const sourceOff = "00000000-0000-4000-8000-0000000000a2";
+  const topicPassed = "00000000-0000-4000-8000-0000000000b1";
+  const topicDrafted = "00000000-0000-4000-8000-0000000000b2";
+  const topicWaiting = "00000000-0000-4000-8000-0000000000b3";
+  const slides = [
+    {
+      role: "cover",
+      kicker: "Ekspansi",
+      headline: "Dua belas merek masuk Libya",
+      body: "Cuplikan lokal untuk mengecek tombol studio.",
+    },
+    {
+      role: "point",
+      kicker: "Fakta",
+      headline: "Rencana berjalan sampai 2028",
+      body: "Satu fakta pada slide ini.",
+    },
+    {
+      role: "cta",
+      kicker: "Sumber",
+      headline: "Baca selengkapnya di link bio",
+      body: "Sumber: ANTARA Terkini.",
+    },
+  ];
+  await sql.rows(
+    `insert into sources (id, name, url, lang, enabled) values
+       ($1, 'ANTARA Terkini', 'https://preview.local/antara', 'ID', true),
+       ($2, 'Wawancara lokal', 'https://preview.local/wawancara', 'ID', false)
+     on conflict (id) do nothing`,
+    [sourceOn, sourceOff],
+  );
+  await sql.rows(
+    `insert into topics (id, source_id, title, url, state, score, tags, score_reason, scored_at)
+     values ($1, $2, 'Dua belas merek kuliner masuk Libya', 'https://preview.local/libya', 'passed', 82, $3::jsonb, 'Skor lokal untuk pratinjau.', now())
+     on conflict (id) do nothing`,
+    [topicPassed, sourceOn, JSON.stringify(["kuliner", "bisnis"])],
+  );
+  await sql.rows(
+    `insert into topics (id, source_id, title, url, state, score, tags, score_reason, scored_at)
+     values ($1, $2, 'Pengurus baru diminta fokus perlindungan', 'https://preview.local/kpad', 'drafted', 80, '[]'::jsonb, 'Skor lokal untuk pratinjau.', now())
+     on conflict (id) do nothing`,
+    [topicDrafted, sourceOn],
+  );
+  await sql.rows(
+    `insert into topics (id, source_id, title, url, state, tags)
+     values ($1, $2, 'Topik yang masih menunggu nilai', 'https://preview.local/menunggu', 'new', '[]'::jsonb)
+     on conflict (id) do nothing`,
+    [topicWaiting, sourceOn],
+  );
+  await sql.rows(
+    `insert into drafts (
+       id, topic_id, status, format, template, slides, caption, hashtags, alt_headlines, short_code, text_dirty
+     ) values (
+       $1, $2, 'needs_review', 'carousel_full', 'berita_pro', $3::jsonb, $4, $5::jsonb, $6::jsonb, 'lokal1', false
+     ) on conflict (id) do nothing`,
+    [
+      DEMO_REVIEW_DRAFT_ID,
+      topicDrafted,
+      JSON.stringify(slides),
+      "Dinas terkait meminta fokus pada perlindungan. Sumber: ANTARA Terkini.",
+      JSON.stringify(["perlindungan", "bali", "berita"]),
+      JSON.stringify(["Fokus perlindungan anak di Bali", "Langkah di era digital"]),
+    ],
+  );
+  for (let index = 0; index < 3; index += 1) {
+    await sql.rows(
+      `insert into assets (id, draft_id, slide_index, bytes)
+       values ($1, $2, $3, $4)
+       on conflict (draft_id, slide_index) do nothing`,
+      [`00000000-0000-4000-8000-000000000c0${index}`, DEMO_REVIEW_DRAFT_ID, index, PREVIEW_PNG],
+    );
+  }
+}
+
 async function seedDemoAdmin(sql: Sql): Promise<void> {
   // The known demo password stays off production even if SEED_DEMO=1 is still set.
   if (process.env.SEED_DEMO !== "1" || process.env.NODE_ENV === "production") {
     return;
   }
+  await seedLocalPreview(sql);
   const existing = await sql.rows<{ id: string }>("select id from users where lower(email) = $1", [
     DEMO_EMAIL,
   ]);

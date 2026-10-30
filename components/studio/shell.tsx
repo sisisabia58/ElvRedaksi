@@ -20,6 +20,7 @@ const gridStyle = {
   backgroundImage:
     "linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px)",
   backgroundSize: "32px 32px",
+  colorScheme: "dark" as const,
 };
 
 function userInitial(name: string): string {

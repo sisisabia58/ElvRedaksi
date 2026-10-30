@@ -494,7 +494,7 @@ export function EditorPanel({
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="destructive"
                 disabled={pending}
                 onClick={() => run(() => rejectDraftAction(draft.id))}
               >
@@ -516,6 +516,7 @@ export function EditorPanel({
               <Button
                 type="button"
                 size="sm"
+                variant="outline"
                 disabled={pending || publishBlocked}
                 onClick={() => run(() => retryFailedAction(draft.id))}
               >
@@ -538,6 +539,7 @@ export function EditorPanel({
               <Button
                 type="button"
                 size="sm"
+                variant="outline"
                 disabled={pending || publishBlocked || !scheduleAt}
                 onClick={() =>
                   run(() => scheduleDraftAction(draft.id, `${scheduleAt}+07:00`))

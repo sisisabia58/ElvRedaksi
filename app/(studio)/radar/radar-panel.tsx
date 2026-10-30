@@ -120,8 +120,8 @@ export function RadarPanel({
             href={linkWith({ filter: opt.value })}
             className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
               filter === opt.value
-                ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--ink)]"
-                : "border-[var(--line)] text-[var(--muted)] hover:border-[var(--ink)]"
+                ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--bg)]"
+                : "border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] hover:border-[var(--ink)]"
             }`}
           >
             {opt.label}

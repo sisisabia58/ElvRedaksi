@@ -127,8 +127,8 @@ export default async function AnalitikPage({
                 href={pageHref(range, sort)}
                 className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
                   days === range
-                    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--ink)]"
-                    : "border-[var(--line)] text-[var(--muted)] hover:border-[var(--ink)]"
+                    ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--bg)]"
+                    : "border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] hover:border-[var(--ink)]"
                 }`}
               >
                 {range} hari

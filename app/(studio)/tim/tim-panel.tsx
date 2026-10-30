@@ -38,7 +38,7 @@ const ACCESS_MATRIX: { role: string; line: string }[] = [
 ];
 
 const selectClass =
-  "flex h-9 w-full rounded-md border border-[var(--line)] bg-transparent px-3 py-1 text-sm";
+  "flex h-9 w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-sm text-[var(--ink)]";
 
 export function TimPanel({ members }: { members: TeamMemberView[] }) {
   const router = useRouter();
