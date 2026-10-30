@@ -44,8 +44,12 @@ describe("copywriter", () => {
     );
     expect(acronym.slides[0]?.kicker).toBe("UMKM Bantul");
     const budget = slideBodyCharBudget();
-    expect(copySystem("Brain.", { slideCount: 3 })).toContain(String(budget));
-    expect(copySystem("Brain.", { slideCount: 3 })).toContain("akhir kalimat");
+    const prompt = copySystem("Brain.", { slideCount: 3 });
+    expect(prompt).toContain(String(budget));
+    expect(prompt).toContain("akhir kalimat");
+    expect(prompt).toContain("8–120");
+    expect(prompt).toContain("20–500");
+    expect(prompt).toContain("3–8");
     const sentence = "Kalimat pertama cukup panjang untuk mengisi beberapa baris pada slide isi berita. ";
     const crowded = parseCopy(
       JSON.stringify({
@@ -105,10 +109,54 @@ describe("copywriter", () => {
     expect(copy.caption).toContain("Contoh");
   });
 
-  it("rejects a carousel that forgets the source", () => {
-    expect(() => parseCopy(JSON.stringify({ ...good, caption: "Tanpa nama media." }), "Contoh")).toThrow(
-      /naskah tidak valid/,
-    );
+  it("adds the source name when the caption forgot it", () => {
+    const copy = parseCopy(JSON.stringify({ ...good, caption: "Tanpa nama media sama sekali." }), "Contoh");
+    expect(copy.caption.toLowerCase()).toContain("contoh");
+    expect(copy.caption.length).toBeGreaterThanOrEqual(20);
+    expect(copy.caption.length).toBeLessThanOrEqual(500);
+  });
+
+  it("repairs the near-misses that used to fail as naskah tidak valid", () => {
+    const sentence = "Pemerintah menyiapkan lahan percontohan di pesisir selatan pada musim ini. ";
+    const body = `${sentence.repeat(6)}Kalimat yang harusnya jatuh.`;
+    expect(body.length).toBeGreaterThan(280);
+    const longHeadline = "Pemerintah memastikan stok beras nasional masih aman meski harga di beberapa kota besar terus bergerak naik pekan ini juga sekarang";
+    expect(longHeadline.length).toBeGreaterThan(120);
+    const longCaption = `${"Ringkasan panjang dari perkembangan hari ini untuk pembaca yang ingin konteks sebelum membuka artikel. ".repeat(6)}ANTARA`;
+    expect(longCaption.length).toBeGreaterThan(500);
+    const payload = {
+      slides: [
+        {
+          role: "cover",
+          kicker: "Kategori yang terlalu panjang untuk satu baris kategori slide berita",
+          headline: longHeadline,
+          body: "Satu kalimat pembuka yang cukup.",
+        },
+        { role: "point", kicker: "Fakta", headline: "Uji coba dibuka minggu ini", body },
+        { role: "point", kicker: "Dampak", headline: "Tim konten harus cek sumber", body: "Jangan bagikan ulang mentah." },
+        { role: "cta", kicker: "Sumber", headline: "Baca lengkapnya di link bio", body: "Artikel asli ada di sumber." },
+      ],
+      caption: longCaption,
+      hashtags: ["#Ekonomi Digital", "UMKM!", "berita", "investasi", "daerah", "pasar", "nelayan", "pangan", "stok", "harga"],
+      altHeadlines: ["Hanya satu judul alternatif yang cukup panjang untuk diuji"],
+    };
+    const copy = parseCopy(`\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``, "ANTARA Terkini");
+    expect(copy.slides[1]?.body.endsWith(".")).toBe(true);
+    expect(copy.slides[1]?.body).not.toContain("Kalimat yang harusnya jatuh");
+    expect(copy.slides[1]?.body.length).toBeLessThan(body.length);
+    expect(copy.slides[0]?.headline.length).toBeLessThanOrEqual(120);
+    expect(copy.slides[0]?.headline.length).toBeGreaterThanOrEqual(8);
+    expect(copy.slides[0]?.headline.endsWith("sekarang")).toBe(false);
+    expect(copy.slides[0]?.kicker.length).toBeLessThanOrEqual(40);
+    expect(copy.caption.toLowerCase()).toContain("antara terkini");
+    expect(copy.caption.length).toBeLessThanOrEqual(500);
+    expect(copy.caption.length).toBeGreaterThanOrEqual(20);
+    expect(copy.hashtags.length).toBeGreaterThanOrEqual(3);
+    expect(copy.hashtags.length).toBeLessThanOrEqual(8);
+    expect(copy.hashtags.every((tag) => /^[a-z0-9]+$/.test(tag))).toBe(true);
+    expect(copy.hashtags[0]).toBe("ekonomidigital");
+    expect(copy.altHeadlines).toHaveLength(2);
+    expect(() => parseCopy("bukan json sama sekali", "ANTARA Terkini")).toThrow(/naskah tidak valid/);
   });
 
   it("writes a draft and asks the designer to render it", async () => {

@@ -1,4 +1,14 @@
 import { z } from "zod";
+import {
+  BODY_MAX,
+  CAPTION_MAX,
+  CAPTION_MIN,
+  HASHTAG_MAX,
+  HASHTAG_MIN,
+  HEADLINE_MAX,
+  HEADLINE_MIN,
+} from "./copy-limits";
+import { repairCopyText } from "./copy-repair";
 import { normalizeKicker } from "../domain/tags";
 import { fitSlideBody } from "../render/fit-body";
 
@@ -19,8 +29,8 @@ export type DraftCopy = {
 const slideSchema = z.object({
   role: z.enum(["cover", "point", "cta"]),
   kicker: z.string(),
-  headline: z.string().min(8).max(120),
-  body: z.string().min(1).max(1600),
+  headline: z.string().min(HEADLINE_MIN).max(HEADLINE_MAX),
+  body: z.string().min(1).max(BODY_MAX),
 });
 
 const hashtagSchema = z.string().regex(/^[a-z0-9]+$/);
@@ -57,27 +67,19 @@ export function stripTrailingSource(body: string, sourceName: string): string {
 }
 
 export function parseCopy(text: string, sourceName: string): DraftCopy {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  const repaired = repairCopyText(text, sourceName);
+  if (!repaired) {
     invalid();
-  }
-  if (parsed && typeof parsed === "object" && "hashtags" in parsed && Array.isArray(parsed.hashtags)) {
-    parsed.hashtags = parsed.hashtags
-      .filter((tag): tag is string => typeof tag === "string")
-      .map((tag) => tag.trim().replace(/^#+/, "").toLowerCase().replace(/[^a-z0-9]/g, ""))
-      .filter((tag) => tag.length > 0);
   }
 
   const root = z
     .object({
       slides: z.array(z.unknown()),
-      caption: z.string().min(20).max(500),
-      hashtags: z.array(hashtagSchema).min(3).max(8),
+      caption: z.string().min(CAPTION_MIN).max(CAPTION_MAX),
+      hashtags: z.array(hashtagSchema).min(HASHTAG_MIN).max(HASHTAG_MAX),
       altHeadlines: z.array(z.string()).length(2),
     })
-    .safeParse(parsed);
+    .safeParse(repaired);
 
   if (!root.success) {
     invalid();

@@ -433,6 +433,18 @@ async function draftStatusForTopic(
   return rows[0] ?? null;
 }
 
+async function topicNeedsFreshScore(sql: JobCtx["sql"], topicId: string): Promise<boolean> {
+  const rows = await sql.rows<{ score: number | null; score_reason: string | null }>(
+    "select score, score_reason from topics where id = $1",
+    [topicId],
+  );
+  const row = rows[0];
+  if (!row || row.score == null) {
+    return true;
+  }
+  return String(row.score_reason ?? "").includes("(demo)");
+}
+
 async function rewriteDemoReviewDraft(
   ctx: CopywriterCtx,
   llm: LlmProvider,
@@ -461,44 +473,48 @@ async function rewriteDemoReviewDraft(
     `Cuplikan: ${topic.excerpt}`,
   ].join("\n");
 
-  const scoredResult = await llm.complete({
-    purpose: "score",
-    system: analystSystem(brain),
-    user,
-  });
-  await ctx.sql.rows(
-    `insert into llm_spend (id, agent, model, cost_usd) values ($1, $2, $3, $4)`,
-    [randomUUID(), "analis", scoredResult.model, scoredResult.costUsd],
-  );
-  const scored = scoreTopic(scoredResult.text);
-  const score = totalScore(scored.aspects);
-  const scoredRows = await ctx.sql.rows<{ id: string }>(
-    `update topics set
-       score = $1,
-       aspects = $2::jsonb,
-       tags = $3::jsonb,
-       sensitive = $4,
-       sensitive_reason = $5,
-       blocked = $6,
-       score_reason = $7,
-       scored_at = $8,
-       error = null
-     where id = $9 and state = 'drafted'
-     returning id`,
-    [
-      score,
-      JSON.stringify(scored.aspects),
-      JSON.stringify(scored.tags),
-      scored.sensitive,
-      scored.sensitiveReason,
-      scored.blocked,
-      scored.reason,
-      ctx.now,
-      topic.id,
-    ],
-  );
-  if (scoredRows.length === 0) {
-    return;
+  // A real score is already on the topic. Scoring again would spend a second
+  // Gemini request and the copy is the only part still missing.
+  if (await topicNeedsFreshScore(ctx.sql, topic.id)) {
+    const scoredResult = await llm.complete({
+      purpose: "score",
+      system: analystSystem(brain),
+      user,
+    });
+    await ctx.sql.rows(
+      `insert into llm_spend (id, agent, model, cost_usd) values ($1, $2, $3, $4)`,
+      [randomUUID(), "analis", scoredResult.model, scoredResult.costUsd],
+    );
+    const scored = scoreTopic(scoredResult.text);
+    const score = totalScore(scored.aspects);
+    const scoredRows = await ctx.sql.rows<{ id: string }>(
+      `update topics set
+         score = $1,
+         aspects = $2::jsonb,
+         tags = $3::jsonb,
+         sensitive = $4,
+         sensitive_reason = $5,
+         blocked = $6,
+         score_reason = $7,
+         scored_at = $8,
+         error = null
+       where id = $9 and state = 'drafted'
+       returning id`,
+      [
+        score,
+        JSON.stringify(scored.aspects),
+        JSON.stringify(scored.tags),
+        scored.sensitive,
+        scored.sensitiveReason,
+        scored.blocked,
+        scored.reason,
+        ctx.now,
+        topic.id,
+      ],
+    );
+    if (scoredRows.length === 0) {
+      return;
+    }
   }
 
   const stillReview = await draftStatusForTopic(ctx.sql, topic.id);

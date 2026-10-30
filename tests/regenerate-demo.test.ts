@@ -162,6 +162,45 @@ describe("demo draft regeneration", () => {
     expect(jobs.map((job) => job.name)).toEqual(["designer.render"]);
   });
 
+  it("skips a second score when the topic already has a real one", async () => {
+    const sql = await createTestSql();
+    await seedDefaults(sql);
+    await sql.rows("insert into sources (id, name, url, lang) values ($1,$2,$3,$4)", [
+      SOURCE,
+      "Contoh",
+      "https://news.example/feed",
+      "ID",
+    ]);
+    await seedPair(sql, {
+      topicId: DEMO_TOPIC,
+      draftId: DEMO_DRAFT,
+      status: "needs_review",
+      reason: "Skor dari model sungguhan.",
+      shortCode: "real1",
+    });
+    const calls: string[] = [];
+    await runCopywriter({
+      sql,
+      payload: { topicId: DEMO_TOPIC, regenerateDemo: true },
+      manual: true,
+      now: new Date("2026-10-29T12:00:00Z"),
+      llm: {
+        async complete(req) {
+          calls.push(req.purpose);
+          return { text: JSON.stringify(newCopy), costUsd: 0, model: "test" };
+        },
+      },
+    });
+    expect(calls).toEqual(["copy"]);
+    const spend = await sql.rows<{ agent: string }>("select agent from llm_spend");
+    expect(spend.map((row) => row.agent)).toEqual(["copywriter"]);
+    const draft = await sql.rows<{ caption: string; status: string }>(
+      "select caption, status from drafts where id = $1",
+      [DEMO_DRAFT],
+    );
+    expect(draft[0]).toMatchObject({ status: "needs_review", caption: newCopy.caption });
+  });
+
   it("does not touch an approved draft", async () => {
     const sql = await createTestSql();
     await seedDefaults(sql);

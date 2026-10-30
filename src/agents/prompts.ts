@@ -1,3 +1,15 @@
+import {
+  BODY_MAX,
+  CAPTION_MAX,
+  CAPTION_MIN,
+  HASHTAG_MAX,
+  HASHTAG_MIN,
+  HEADLINE_MAX,
+  HEADLINE_MIN,
+  KICKER_MAX,
+  POINT_MAX,
+  POINT_MIN,
+} from "./copy-limits";
 import { slideBodyCharBudget } from "../render/fit-body";
 
 export function analystSystem(brain: string): string {
@@ -37,11 +49,19 @@ Aturan jumlah slide ini mengalahkan catatan carousel di brain bila berbeda:
 - Gambar yang tayang paling banyak ${slideCount}: 1 sampul dan ${points} slide isi.
 - JSON tetap diakhiri satu slide role "cta". Slide itu menjaga format teaser. Template Berita Pro tidak menggambarnya sebagai slide terpisah.
 - Sampul (role cover): headline bahasa Indonesia, pertanyaan atau pernyataan pendek, paling banyak 10 kata, tetap sesuai cuplikan.
-- Slide isi (role point): tepat ${points} buah. Headline dan body hanya dari cuplikan. Body 1–2 kalimat utuh, paling banyak ${slideBodyCharBudget()} karakter, dan harus selesai di akhir kalimat. Jangan memotong kata atau kalimat. Jangan menambah angka, nama, kutipan, atau kejadian yang tidak ada di cuplikan.
-- Jangan akhiri body dengan nama media atau sumber. Sumber hanya masuk caption.
+- Slide isi (role point): tepat ${points} buah. Parser menerima ${POINT_MIN}–${POINT_MAX}. Headline dan body hanya dari cuplikan. Body 1–2 kalimat utuh, paling banyak ${slideBodyCharBudget()} karakter yang ditayangkan, dan harus selesai di akhir kalimat. Jangan memotong kata atau kalimat. Jangan menambah angka, nama, kutipan, atau kejadian yang tidak ada di cuplikan.
+- Jangan akhiri body dengan nama media atau sumber. Sumber hanya masuk caption, dan caption wajib memuat nama sumber persis seperti pada baris Sumber.
 - Slide cta: headline berisi ajakan membaca selengkapnya di link bio. ${follow}
-- kicker adalah kategori singkat.
+- kicker adalah kategori singkat, paling banyak ${KICKER_MAX} karakter.
 - Jangan mengarang fakta.
+
+Batas yang parser terapkan pada JSON:
+- headline ${HEADLINE_MIN}–${HEADLINE_MAX} karakter
+- body 1–${BODY_MAX} karakter; yang lebih panjang dari ${slideBodyCharBudget()} karakter dipotong di akhir kalimat
+- caption ${CAPTION_MIN}–${CAPTION_MAX} karakter
+- hashtags ${HASHTAG_MIN}–${HASHTAG_MAX}, huruf kecil a-z dan angka, tanpa tanda pagar
+- altHeadlines tepat 2 string
+- urutan slide: cover, point, cta
 
 Kembalikan hanya JSON dengan field slides, caption, hashtags, dan altHeadlines.`;
 }
