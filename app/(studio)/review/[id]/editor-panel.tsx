@@ -4,7 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import type { Slide } from "@/src/agents/copywriter";
-import { draftStatusLabel, reviewActionVisible, type DraftStatus } from "@/src/domain/status";
+import {
+  draftStatusLabel,
+  reviewActionVisible,
+  reviewDeleteConfirm,
+  reviewDeleteLabel,
+  SCHEDULE_MISSING_MESSAGE,
+  type DraftStatus,
+} from "@/src/domain/status";
 import { slidesForFormat } from "@/src/render/pick";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studio/cover-photo";
 import {
@@ -110,14 +117,18 @@ function sourceHref(url: string | null): string | null {
 
 function FieldLabel({ children }: { children: string }) {
   return (
-    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{children}</p>
+    <p data-review-label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+      {children}
+    </p>
   );
 }
 
 function StudioCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-4">
-      <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{title}</h2>
+    <section data-studio-card className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-4">
+      <h2 data-review-label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+        {title}
+      </h2>
       {children}
     </section>
   );
@@ -468,9 +479,12 @@ export function EditorPanel({
 
           {previewTab === "render" ? (
             <div className="space-y-3">
-              <div className="aspect-[4/5] max-h-[58vh] w-full overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-2)]">
+              <div
+                data-cover-preview
+                className="aspect-[4/5] w-full overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-2)]"
+              >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={previewSlideSrc(draft, clampedIndex)} alt="" className="size-full object-cover" />
+                <img src={previewSlideSrc(draft, clampedIndex)} alt="" className="size-full object-contain" />
               </div>
               <div className="flex items-center justify-between gap-2">
                 <Button
@@ -649,8 +663,14 @@ export function EditorPanel({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={pending || publishBlocked || blockPublish || !scheduleAt}
-                onClick={() => run(() => scheduleDraftAction(draft.id, `${scheduleAt}+07:00`))}
+                disabled={pending || publishBlocked || blockPublish}
+                onClick={() => {
+                  if (!scheduleAt) {
+                    setError(SCHEDULE_MISSING_MESSAGE);
+                    return;
+                  }
+                  run(() => scheduleDraftAction(draft.id, `${scheduleAt}+07:00`));
+                }}
               >
                 Jadwalkan
               </Button>
@@ -687,9 +707,13 @@ export function EditorPanel({
                   size="sm"
                   variant="destructive"
                   disabled={pending}
-                  onClick={() => run(() => deleteDraftAction(draft.id), "/review")}
+                  onClick={() => {
+                    const confirm = reviewDeleteConfirm(draft.status);
+                    if (confirm && !window.confirm(confirm)) return;
+                    run(() => deleteDraftAction(draft.id), "/review");
+                  }}
                 >
-                  Hapus
+                  {reviewDeleteLabel(draft.status)}
                 </Button>
               ) : null}
             </div>
@@ -759,7 +783,9 @@ export function EditorPanel({
                           }}
                         >
                           <span className="block text-sm font-medium">{opt.label}</span>
-                          <span className="mt-1 block text-xs text-[var(--muted)]">{opt.detail}</span>
+                          <span data-format-detail className="mt-1 block text-xs text-[var(--muted)]">
+                            {opt.detail}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -817,7 +843,9 @@ export function EditorPanel({
                   <div className="space-y-2">
                     <p className="text-sm text-[var(--ink)]">{slide.kicker}</p>
                     <p className="text-sm font-medium text-[var(--ink)]">{slide.headline}</p>
-                    <p className="text-sm text-[var(--muted)]">{slide.body}</p>
+                    <p data-slide-copy className="text-sm text-[var(--muted)]">
+                      {slide.body}
+                    </p>
                     {!fieldsLocked ? (
                       <Button type="button" size="sm" variant="outline" onClick={() => showPreview(index)}>
                         Ubah slide ini
@@ -830,7 +858,6 @@ export function EditorPanel({
           })}
 
           <StudioCard title="Caption">
-            <FieldLabel>Caption</FieldLabel>
             <Textarea
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
@@ -840,7 +867,6 @@ export function EditorPanel({
           </StudioCard>
 
           <StudioCard title="Hashtag">
-            <FieldLabel>Hashtag</FieldLabel>
             <Input
               value={hashtagsText}
               onChange={(e) => setHashtagsText(e.target.value)}

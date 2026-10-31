@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
 import { contrastRatio } from "../src/domain/contrast";
+import { SCHEDULE_MISSING_MESSAGE } from "../src/domain/status";
 import { createTestSql } from "../src/db/client";
 import { boot, DEMO_REVIEW_DRAFT_ID } from "../src/db/boot";
 
@@ -48,6 +49,23 @@ describe("studio control colors", () => {
       expect(contrastRatio(fg, bg), label).toBeGreaterThanOrEqual(AA);
     }
     expect(contrastRatio("#e8eaed", "#d7ff3a")).toBeLessThan(AA);
+  });
+
+  it("keeps review labels and card borders at WCAG AA on the dark grid", () => {
+    const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+    const token = (name: string) => {
+      const match = css.match(new RegExp(`(?<![\\w-])--${name}:\\s*(#[0-9a-fA-F]{6})`));
+      if (!match) throw new Error(`missing --${name}`);
+      return match[1].toLowerCase();
+    };
+    const muted = token("muted");
+    const line = token("line");
+    const bg = token("bg");
+    const panel = token("panel-2");
+    expect(contrastRatio(muted, panel), "label on card").toBeGreaterThanOrEqual(AA);
+    expect(contrastRatio(muted, bg), "label on grid").toBeGreaterThanOrEqual(AA);
+    expect(contrastRatio(line, bg), "border on grid").toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(line, panel), "border on card").toBeGreaterThanOrEqual(3);
   });
 
   it("keeps outline text explicit and disabled buttons a solid dark pill", () => {
@@ -263,6 +281,42 @@ async function measure(page: Page, label: string): Promise<Problem[]> {
         });
       }
     }
+
+    const copySelector = "[data-review-label], [data-format-detail], [data-slide-copy]";
+    for (const el of document.querySelectorAll(copySelector)) {
+      if (!visible(el)) continue;
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+      const fg = parse(getComputedStyle(el).color);
+      if (!fg) continue;
+      const bg = backgroundOf(el);
+      const solid = composite(fg, bg);
+      const value = ratio(solid, bg);
+      if (value < 4.5) {
+        problems.push({
+          text: text || "review copy",
+          detail: `${value.toFixed(2)}:1 ${hex(solid)} on ${hex(bg)}`,
+        });
+      }
+    }
+
+    for (const el of document.querySelectorAll("[data-studio-card]")) {
+      if (!visible(el)) continue;
+      const title = (el.querySelector("h2")?.textContent ?? "card").replace(/\s+/g, " ").trim().slice(0, 40);
+      const border = parse(getComputedStyle(el).borderTopColor);
+      const fill = parse(getComputedStyle(el).backgroundColor);
+      if (!border) continue;
+      if (fill) {
+        const onCard = ratio(border, fill);
+        if (onCard < 3) {
+          problems.push({ text: title, detail: `border ${onCard.toFixed(2)}:1 on card ${hex(fill)}` });
+        }
+      }
+      const outside = backgroundOf(el.parentElement ?? el);
+      const onPage = ratio(border, outside);
+      if (onPage < 3) {
+        problems.push({ text: title, detail: `border ${onPage.toFixed(2)}:1 on page ${hex(outside)}` });
+      }
+    }
     return problems;
   });
   return found.map((item) => ({ page: label, text: item.text, detail: item.detail }));
@@ -292,6 +346,38 @@ describe("rendered studio pages", () => {
       await page.locator("#password").fill(DEMO_PASSWORD);
       await page.getByRole("button", { name: "Masuk ke HQ" }).click();
       await page.waitForURL("**/overview");
+
+      await page.goto(`${BASE}/review/${DEMO_REVIEW_DRAFT_ID}`, { waitUntil: "domcontentloaded" });
+      await page.getByRole("button", { name: "Posting sekarang" }).waitFor();
+      const previewFit = await page.locator("[data-cover-preview]").evaluate((frame) => {
+        const image = frame.querySelector("img");
+        const box = frame.getBoundingClientRect();
+        return {
+          objectFit: image ? getComputedStyle(image).objectFit : "",
+          ratio: box.height === 0 ? 0 : box.width / box.height,
+        };
+      });
+      expect(previewFit.objectFit).toBe("contain");
+      expect(Math.abs(previewFit.ratio - 4 / 5)).toBeLessThan(0.02);
+      const schedule = page.getByRole("button", { name: "Jadwalkan" });
+      await schedule.scrollIntoViewIfNeeded();
+      expect(await schedule.isEnabled()).toBe(true);
+      let scheduleMessageVisible = false;
+      for (let attempt = 0; attempt < 4 && !scheduleMessageVisible; attempt += 1) {
+        await schedule.click();
+        scheduleMessageVisible = await page
+          .getByText(SCHEDULE_MISSING_MESSAGE)
+          .waitFor({ timeout: 3_000 })
+          .then(() => true)
+          .catch(() => false);
+      }
+      expect(scheduleMessageVisible, "empty schedule must explain itself in Indonesian").toBe(true);
+      for (const title of ["Caption", "Hashtag"]) {
+        const card = page.locator("[data-studio-card]", { has: page.getByRole("heading", { name: title, exact: true }) });
+        expect(await card.locator("[data-review-label]").count()).toBe(1);
+      }
+      expect(await page.locator("[data-format-detail]").count()).toBe(2);
+      expect(await page.locator("[data-slide-copy]").count()).toBeGreaterThan(0);
 
       const shots: Array<{ path: string; file: string; wait: string }> = [
         { path: `/review/${DEMO_REVIEW_DRAFT_ID}`, file: "after-review.png", wait: "Posting sekarang" },

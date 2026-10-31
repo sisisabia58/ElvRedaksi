@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { assertTransition, draftStatusLabel, reviewActionVisible } from "../src/domain/status";
+import {
+  assertTransition,
+  draftStatusLabel,
+  POSTED_DELETE_CONFIRM,
+  reviewActionVisible,
+  reviewDeleteConfirm,
+  reviewDeleteLabel,
+  SCHEDULE_MISSING_MESSAGE,
+} from "../src/domain/status";
 import { greeting, isWithinWorkHours } from "../src/domain/time";
 import { totalScore, verdict } from "../src/domain/score";
 import { deltaPct, engagementRate, formatUsd } from "../src/domain/metrics";
@@ -42,6 +50,13 @@ describe("draft gate", () => {
     expect(draftStatusLabel("posting")).toBe("Sedang diposting");
     expect(draftStatusLabel("posted")).toBe("Sudah diposting");
     expect(draftStatusLabel("simulasi")).toBe("Simulasi");
+    expect(reviewDeleteLabel("posted")).toBe("Hapus dari Redaksi");
+    expect(reviewDeleteConfirm("posted")).toBe(POSTED_DELETE_CONFIRM);
+    expect(POSTED_DELETE_CONFIRM).toBe("Postingan di Instagram tidak ikut terhapus.");
+    expect(reviewDeleteLabel("needs_review")).toBe("Hapus");
+    expect(reviewDeleteConfirm("needs_review")).toBeNull();
+    expect(reviewDeleteConfirm("simulasi")).toBeNull();
+    expect(SCHEDULE_MISSING_MESSAGE).toBe("Pilih tanggal dan jam posting dulu.");
   });
 
   it("requires the manual flag to skip the API", () => {

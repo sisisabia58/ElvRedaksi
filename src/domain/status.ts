@@ -26,6 +26,18 @@ const STATUS_LABELS: Record<DraftStatus, string> = {
 export function draftStatusLabel(status: DraftStatus): string {
   return STATUS_LABELS[status];
 }
+
+export const SCHEDULE_MISSING_MESSAGE = "Pilih tanggal dan jam posting dulu.";
+export const POSTED_DELETE_LABEL = "Hapus dari Redaksi";
+export const POSTED_DELETE_CONFIRM = "Postingan di Instagram tidak ikut terhapus.";
+
+export function reviewDeleteLabel(status: DraftStatus): string {
+  return status === "posted" ? POSTED_DELETE_LABEL : "Hapus";
+}
+
+export function reviewDeleteConfirm(status: DraftStatus): string | null {
+  return status === "posted" ? POSTED_DELETE_CONFIRM : null;
+}
 export type ActorKind = "human" | "worker";
 
 const EDGES: Record<DraftStatus, DraftStatus[]> = {
