@@ -68,6 +68,7 @@ export function PengaturanForm({
     confirm: "",
   });
   const [brand, setBrand] = useState<SettingsInput>(() => brandFromSettings(settings));
+  const [igUserId, setIgUserId] = useState(settings.igUserId ?? "");
   const [igToken, setIgToken] = useState("");
 
   function onBrandSubmit(event: FormEvent<HTMLFormElement>) {
@@ -105,7 +106,7 @@ export function PengaturanForm({
   function onIgConnectSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     startTransition(async () => {
-      const result = await saveInstagramConnectAction(igToken);
+      const result = await saveInstagramConnectAction(igToken, igUserId);
       if (result.ok) {
         setIgError(null);
         setIgToken("");
@@ -428,11 +429,21 @@ export function PengaturanForm({
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Instagram</h2>
-        <p className="text-xs text-[var(--muted)]">
-          Butuh akun Instagram Business atau Creator. Tempel token long-lived dari Instagram Login
-          dengan izin instagram_business_basic, instagram_business_content_publish, dan
-          instagram_business_manage_insights. Token short-lived tidak bisa ditukar di sini.
-        </p>
+        <div className="space-y-2 text-xs text-[var(--muted)]">
+          <p>Akun harus Business atau Creator.</p>
+          <p>
+            Instagram Login: tempel token long-lived dengan izin instagram_business_basic,
+            instagram_business_content_publish, dan instagram_business_manage_insights. Token
+            short-lived tidak bisa ditukar di sini.
+          </p>
+          <p>
+            Facebook Login: akun Instagram Business yang tertaut ke Halaman Facebook. Token sistem
+            atau halaman memakai izin instagram_basic, instagram_content_publish,
+            instagram_manage_insights, pages_show_list, dan pages_read_engagement. Izin iklan
+            (ads_*) tidak diperlukan. Token sistem tidak kedaluwarsa. Isi ID pengguna jika ada
+            beberapa akun.
+          </p>
+        </div>
         {igError ? (
           <p className="text-sm text-destructive" role="alert">
             {igError}
@@ -475,7 +486,16 @@ export function PengaturanForm({
         ) : (
           <form className="space-y-3" onSubmit={onIgConnectSubmit}>
             <ControlledField
-              label="Token akses long-lived"
+              label="ID pengguna Instagram"
+              value={igUserId}
+              autoComplete="off"
+              onChange={setIgUserId}
+            />
+            <p className="text-xs text-[var(--muted)]">
+              Opsional untuk Instagram Login. Untuk Facebook Login, isi jika ada beberapa akun.
+            </p>
+            <ControlledField
+              label="Token akses (Instagram Login atau sistem Meta)"
               type="password"
               value={igToken}
               autoComplete="new-password"
@@ -483,7 +503,7 @@ export function PengaturanForm({
               onChange={setIgToken}
             />
             <p className="text-xs text-[var(--muted)]">
-              Token tidak ditampilkan lagi setelah disimpan. Nama pengguna diisi dari Instagram.
+              Token tidak ditampilkan lagi setelah disimpan. Nama pengguna diisi dari Meta.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={pending}>

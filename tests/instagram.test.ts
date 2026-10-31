@@ -8,7 +8,7 @@ import {
   LOCAL_PUBLIC_URL_ERROR,
   resolvePublicBaseUrl,
 } from "../src/domain/public-url";
-import { runInstagramRefresh, runPublisher } from "../src/jobs/handlers";
+import { runInsights, runInstagramRefresh, runPublisher } from "../src/jobs/handlers";
 import { CONTAINER_POLL_DELAYS_MS, FakePublisher, MetaPublisher } from "../src/publish/publisher";
 import { connectInstagram, getSettings, saveInstagramToken } from "../src/studio/settings";
 import {
@@ -16,6 +16,8 @@ import {
   TOKEN_EXPIRED_DETAIL,
   TOKEN_INVALID_DETAIL,
   TOKEN_INVALID_STATUS,
+  TOKEN_RECONNECT,
+  SEVERAL_IG_ACCOUNTS,
   TOKEN_UNREACHABLE,
   describeInstagramConnection,
   validateInstagramToken,
@@ -196,12 +198,15 @@ describe("instagram token", () => {
     );
     const secret = "tok-plain";
     let seen = "";
+    let calls = 0;
     let authorization = "";
     await connectInstagram(sql, "admin", secret, async (input, init) => {
+      calls += 1;
       seen = String(input);
       authorization = new Headers(init?.headers).get("authorization") ?? "";
       return json({ user_id: 1789, username: "@meja" });
     });
+    expect(calls).toBe(1);
     const url = new URL(seen);
     expect(`${url.origin}${url.pathname}`).toBe("https://graph.instagram.com/v26.0/me");
     expect(url.searchParams.get("fields")).toBe("user_id,username");
@@ -209,6 +214,8 @@ describe("instagram token", () => {
     expect(authorization).toBe(`Bearer ${secret}`);
     const settings = await getSettings(sql);
     expect(settings.igUsername).toBe("meja");
+    const host = await sql.rows<{ api_host: string }>("select api_host from ig_connection");
+    expect(host[0].api_host).toBe("instagram");
     expect(settings.igStatus).toMatch(/^Terhubung sebagai @meja \(dicek .+ WIB\)$/);
     expect(JSON.stringify(settings)).not.toContain(secret);
     const row = await sql.rows<{ expires_at: string | Date }>("select expires_at from ig_connection");
@@ -224,12 +231,12 @@ describe("instagram token", () => {
       connectInstagram(sql, "admin", secret, async () =>
         json({ error: { message: `echo ${secret}`, code: 190 } }, 400),
       ),
-    ).rejects.toThrow(TOKEN_INVALID_DETAIL);
+    ).rejects.toThrow(TOKEN_INVALID_STATUS);
     await expect(
       validateInstagramToken(secret, async () =>
         json({ error: { message: `echo ${secret}`, code: 190, error_subcode: 463 } }, 400),
       ),
-    ).rejects.toThrow(TOKEN_EXPIRED_DETAIL);
+    ).rejects.toThrow(TOKEN_INVALID_STATUS);
     await expect(validateInstagramToken(secret, async () => {
       throw new Error(`down ${secret}`);
     })).rejects.toThrow(TOKEN_UNREACHABLE);
@@ -410,6 +417,177 @@ describe("instagram token", () => {
     expect(calls).toBe(0);
   });
 
+  it("accepts a system-user token on graph.facebook.com and does not expire it", async () => {
+    const sql = await createTestSql();
+    process.env.TOKEN_ENCRYPTION_KEY = "unit-test-key";
+    await sql.rows(
+      `insert into brand (name, handle, initial, accent, kicker) values ('A', '', 'A', '#4E708C', 'K')`,
+    );
+    const secret = "tok-suat";
+    const urls: string[] = [];
+    await connectInstagram(sql, "admin", secret, async (input, init) => {
+      const url = new URL(String(input));
+      urls.push(`${url.origin}${url.pathname}?${url.searchParams.get("fields")}`);
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${secret}`);
+      expect(url.searchParams.has("access_token")).toBe(false);
+      if (url.hostname === "graph.instagram.com") return json({ error: { message: secret, code: 190 } }, 400);
+      if (url.pathname.endsWith("/1789")) return json({ id: "1789", username: "analystdigest" });
+      return json({ error: { message: secret } }, 400);
+    }, "1789");
+    expect(urls[0]).toContain("https://graph.instagram.com/v26.0/me");
+    expect(urls.some((url) => url.startsWith("https://graph.facebook.com/v26.0/1789"))).toBe(true);
+    expect(urls.some((url) => url.includes("/me/accounts"))).toBe(false);
+    const row = await sql.rows<{ api_host: string; expires_at: string | null; username: string; access_token: string }>(
+      "select api_host, expires_at, username, access_token from ig_connection",
+    );
+    expect(row[0].api_host).toBe("facebook");
+    expect(row[0].expires_at).toBeNull();
+    expect(row[0].username).toBe("analystdigest");
+    expect(row[0].access_token).not.toContain(secret);
+    const settings = await getSettings(sql);
+    expect(settings.igStatus).toMatch(/Token tidak kedaluwarsa$/);
+    expect(JSON.stringify(settings)).not.toContain(secret);
+  });
+
+  it("discovers one Instagram business account and asks for an id when there are several", async () => {
+    const sql = await createTestSql();
+    const secret = "tok-suat";
+    const pages = {
+      data: [
+        { instagram_business_account: { id: "111", username: "satu" } },
+        { instagram_business_account: { id: "222", username: "dua" } },
+      ],
+    };
+    await expect(
+      connectInstagram(sql, "admin", secret, async (input) => {
+        const url = String(input);
+        if (url.includes("graph.instagram.com")) return json({ error: { code: 190 } }, 400);
+        if (url.includes("/me/accounts")) return json(pages);
+        if (url.includes("/me?")) return json({ id: "system-user" });
+        return json({ error: { code: 190 } }, 400);
+      }),
+    ).rejects.toThrow(SEVERAL_IG_ACCOUNTS);
+    const empty = await sql.rows<{ access_token: string | null }>("select access_token from ig_connection");
+    expect(empty[0].access_token).toBeNull();
+
+    const urls: string[] = [];
+    await connectInstagram(
+      sql,
+      "admin",
+      secret,
+      async (input) => {
+        const url = String(input);
+        urls.push(url);
+        if (url.includes("graph.instagram.com")) return json({ error: { code: 190 } }, 400);
+        if (url.includes("/me/accounts")) return json({ data: [pages.data[0]] });
+        if (url.includes("/me?")) return json({ id: "system-user" });
+        return json({ error: { code: 190 } }, 400);
+      },
+    );
+    expect(urls.some((url) => url.includes("graph.facebook.com/v26.0/me?"))).toBe(true);
+    expect(urls.some((url) => url.includes("/me/accounts"))).toBe(true);
+    const row = await sql.rows<{ ig_user_id: string; username: string; api_host: string }>(
+      "select ig_user_id, username, api_host from ig_connection",
+    );
+    expect(row[0]).toMatchObject({ ig_user_id: "111", username: "satu", api_host: "facebook" });
+  });
+
+  it("publishes on the stored Facebook host", async () => {
+    const urls: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      urls.push(url);
+      expect(new URL(url).searchParams.has("access_token")).toBe(false);
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tok-suat");
+      if (url.includes("content_publishing_limit")) {
+        return json({ data: [{ quota_usage: 0, config: { quota_total: 25 } }] });
+      }
+      if (url.includes("fields=status_code")) return json({ status_code: "FINISHED" });
+      return json({ id: "container" });
+    };
+    const meta = new MetaPublisher(fetchImpl, async () => {});
+    await meta.publish({
+      igUserId: "1789",
+      accessToken: "tok-suat",
+      imageUrls: ["https://studio.example/a.jpg"],
+      caption: "cap",
+      altTexts: ["alt"],
+      shareToStory: false,
+      graphHost: "facebook",
+    });
+    expect(urls.every((url) => url.startsWith("https://graph.facebook.com/v26.0/"))).toBe(true);
+  });
+
+  it("falls back when Facebook insights reject views and flags oauth 190", async () => {
+    process.env.META_PROVIDER = "meta";
+    const sql = await createTestSql();
+    const now = new Date("2026-10-28T02:00:00Z");
+    await sql.rows(
+      `update ig_connection set ig_user_id = '1789', access_token = 'tok-suat', username = 'meja',
+         api_host = 'facebook', expires_at = null where id = 1`,
+    );
+    const metrics: string[] = [];
+    await runInsights({
+      sql,
+      payload: {},
+      manual: true,
+      now,
+      fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        expect(url.hostname).toBe("graph.facebook.com");
+        expect(url.searchParams.has("access_token")).toBe(false);
+        const metric = url.searchParams.get("metric");
+        if (metric) metrics.push(metric);
+        if (metric === "views,reach") return json({ error: { message: "metric", code: 100 } }, 400);
+        if (metric === "impressions,reach") {
+          return json({
+            data: [{ name: "impressions", period: "day", values: [{ value: 9, end_time: "2026-10-29T00:00:00+07:00" }] }],
+          });
+        }
+        if (url.pathname.includes("/media")) return json({ data: [] });
+        return json({ followers_count: 10, id: "1789" });
+      },
+    });
+    expect(metrics).toEqual(["views,reach", "impressions,reach"]);
+    const snapshots = await sql.rows<{ views: number }>("select views from insight_snapshots");
+    expect(snapshots[0].views).toBe(9);
+
+    await sql.rows("delete from insight_snapshots");
+    await runInsights({
+      sql,
+      payload: {},
+      manual: true,
+      now,
+      fetchImpl: async () => json({ error: { message: "echo tok-suat", code: 190 } }, 400),
+    });
+    const marked = await sql.rows<{ token_error: string }>("select token_error from ig_connection");
+    expect(marked[0].token_error).toBe(TOKEN_RECONNECT);
+    expect(marked[0].token_error).not.toContain("tok-suat");
+  });
+
+  it("does not refresh a non-expiring Facebook token", async () => {
+    process.env.META_PROVIDER = "meta";
+    const sql = await createTestSql();
+    const now = new Date("2026-10-28T02:00:00Z");
+    await sql.rows(
+      `update ig_connection set access_token = 'tok-suat', ig_user_id = '1789', username = 'meja',
+         api_host = 'facebook', connected_at = $1, expires_at = $2 where id = 1`,
+      [new Date(now.getTime() - 25 * 60 * 60 * 1000), new Date(now.getTime() + 10 * DAY)],
+    );
+    let calls = 0;
+    await runInstagramRefresh({
+      sql,
+      payload: {},
+      manual: false,
+      now,
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error("facebook tokens are not refreshed");
+      },
+    });
+    expect(calls).toBe(0);
+  });
+
   it("adds the token columns twice without failing", async () => {
     const sql = await createTestSql();
     await ensureSchemaExtras(sql);
@@ -419,6 +597,11 @@ describe("instagram token", () => {
        where table_name = 'ig_connection' and column_name = 'expires_at'`,
     );
     expect(columns).toHaveLength(1);
+    const host = await sql.rows<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_name = 'ig_connection' and column_name = 'api_host'`,
+    );
+    expect(host).toHaveLength(1);
   });
 });
 

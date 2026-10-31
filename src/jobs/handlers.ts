@@ -11,8 +11,8 @@ import {
   TIME_ZONE,
 } from "../domain/constants";
 import { publicUrlPublishError, resolvePublicBaseUrl } from "../domain/public-url";
-import { bearerInit, graphUrl } from "../instagram/graph";
-import { IG_REFRESH_INTERVAL_MS, refreshStoredInstagramToken } from "../instagram/token";
+import { bearerInit, graphUrl, type GraphHost } from "../instagram/graph";
+import { IG_REFRESH_INTERVAL_MS, TOKEN_RECONNECT, refreshStoredInstagramToken } from "../instagram/token";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
 import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from "../publish/publisher";
@@ -1005,6 +1005,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     public_base_url: string | null;
     ig_user_id: string | null;
     access_token: string | null;
+    api_host: string | null;
     ig_media_id: string | null;
     story_media_id: string | null;
     story_error: string | null;
@@ -1012,7 +1013,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     `select d.status, d.caption, d.hashtags, d.slides, d.format, d.template, d.share_to_story,
             t.url as topic_url, s.name as source_name,
             b.public_base_url, b.slide_count,
-            i.ig_user_id, i.access_token,
+            i.ig_user_id, i.access_token, i.api_host,
             d.ig_media_id, d.story_media_id, d.story_error
      from drafts d
      join topics t on t.id = d.topic_id
@@ -1119,9 +1120,11 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
       caption,
       altTexts,
       shareToStory: draft.share_to_story,
+      graphHost: graphHost(draft.api_host),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === TOKEN_RECONNECT) await markTokenReconnect(ctx.sql);
     assertTransition("worker", "posting", "failed");
     await ctx.sql.rows(
       `update drafts set status = 'failed', error = $1, updated_at = $2
@@ -1141,6 +1144,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
   if (saved.length === 0) {
     throw new Error("Status draf sudah berubah");
   }
+  if (result.storyError === TOKEN_RECONNECT) await markTokenReconnect(ctx.sql);
   await finishPostingDraft(ctx, draftId, {
     mediaId: result.mediaId,
     storyMediaId: result.storyMediaId,
@@ -1171,13 +1175,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function graphHost(value: string | null | undefined): GraphHost {
+  return value === "facebook" ? "facebook" : "instagram";
+}
+
+async function markTokenReconnect(sql: JobCtx["sql"]): Promise<void> {
+  await sql.rows(`update ig_connection set token_error = $1 where id = 1`, [TOKEN_RECONNECT]);
+}
+
+function graphErrorCode(body: unknown): number | null {
+  if (!isRecord(body) || !isRecord(body.error) || typeof body.error.code !== "number") return null;
+  return body.error.code;
+}
+
 async function graphGet(
   fetchImpl: typeof fetch,
   path: string,
   accessToken: string,
   query?: Record<string, string>,
+  host?: GraphHost | null,
 ): Promise<unknown> {
-  const res = await fetchImpl(graphUrl(path, query), bearerInit(accessToken));
+  const res = await fetchImpl(graphUrl(path, query, host), bearerInit(accessToken));
   let body: unknown = null;
   try {
     body = await res.json();
@@ -1231,7 +1249,7 @@ function readDaily(
   const byDate = new Map<string, { views: number; reach: number }>();
   for (const metric of body.data) {
     if (!isRecord(metric) || isRecord(metric.error)) continue;
-    if (metric.name !== "views" && metric.name !== "reach") continue;
+    if (metric.name !== "views" && metric.name !== "reach" && metric.name !== "impressions") continue;
     if (!Array.isArray(metric.values)) continue;
     for (const point of metric.values) {
       if (!isRecord(point) || typeof point.end_time !== "string") continue;
@@ -1241,7 +1259,8 @@ function readDaily(
       // period=day end_time is the exclusive midnight that ends that day.
       const date = jakartaDate(new Date(at.getTime() - 1));
       const row = byDate.get(date) ?? { views: 0, reach: 0 };
-      row[metric.name] += point.value;
+      const bucket = metric.name === "impressions" ? "views" : metric.name;
+      row[bucket] += point.value;
       byDate.set(date, row);
     }
   }
@@ -1311,7 +1330,7 @@ function readPosts(body: unknown): {
     const insightData = insights && Array.isArray(insights.data) ? insights.data : [];
     posts.push({
       igMediaId,
-      views: metricNumber(insightData, "views"),
+      views: metricNumber(insightData, "views") || metricNumber(insightData, "impressions"),
       reach: metricNumber(insightData, "reach"),
       saves: metricNumber(insightData, "saved"),
       shares: metricNumber(insightData, "shares"),
@@ -1351,9 +1370,12 @@ async function enqueueNextInsights(ctx: JobCtx): Promise<void> {
 
 export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): Promise<void> {
   const fetchImpl = ctx.fetchImpl ?? fetch;
-  const rows = await ctx.sql.rows<{ ig_user_id: string | null; access_token: string | null }>(
-    `select ig_user_id, access_token from ig_connection where id = 1`,
-  );
+  const rows = await ctx.sql.rows<{
+    ig_user_id: string | null;
+    access_token: string | null;
+    api_host: string | null;
+    token_error: string | null;
+  }>(`select ig_user_id, access_token, api_host, token_error from ig_connection where id = 1`);
   const connection = rows[0];
   const token = openAccessToken(connection?.access_token);
   const igUserId = connection?.ig_user_id?.trim() ?? "";
@@ -1368,11 +1390,12 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
   }
 
   // Latihan mode may validate a token when it is saved. It must not pull insights.
-  if (process.env.META_PROVIDER !== "meta") {
+  if (process.env.META_PROVIDER !== "meta" || connection?.token_error === TOKEN_RECONNECT) {
     await enqueueNextInsights(ctx);
     return;
   }
 
+  const host = graphHost(connection?.api_host);
   const since = Math.floor((ctx.now.getTime() - 90 * 24 * 60 * 60 * 1000) / 1000);
   const until = Math.floor(ctx.now.getTime() / 1000);
   let followersBody: unknown;
@@ -1380,19 +1403,43 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
   let mediaBody: unknown;
   try {
     [followersBody, insightsBody, mediaBody] = await Promise.all([
-      graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }),
+      graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }, host),
       graphGet(fetchImpl, `${igUserId}/insights`, token, {
         metric: "views,reach",
         period: "day",
         since: String(since),
         until: String(until),
-      }),
+      }, host),
       graphGet(fetchImpl, `${igUserId}/media`, token, {
         fields: "id,timestamp,like_count,comments_count,media_type,insights.metric(views,reach,saved,shares)",
         limit: "50",
-      }),
+      }, host),
     ]);
+    if (host === "facebook" && graphErrorCode(insightsBody) === 100) {
+      insightsBody = await graphGet(fetchImpl, `${igUserId}/insights`, token, {
+        metric: "impressions,reach",
+        period: "day",
+        since: String(since),
+        until: String(until),
+      }, host);
+    }
+    if (host === "facebook" && graphErrorCode(mediaBody) === 100) {
+      mediaBody = await graphGet(fetchImpl, `${igUserId}/media`, token, {
+        fields: "id,timestamp,like_count,comments_count,media_type",
+        limit: "50",
+      }, host);
+    }
   } catch {
+    await recordInsightsFailure(ctx);
+    return;
+  }
+
+  if (
+    graphErrorCode(followersBody) === 190 ||
+    graphErrorCode(insightsBody) === 190 ||
+    graphErrorCode(mediaBody) === 190
+  ) {
+    await markTokenReconnect(ctx.sql);
     await recordInsightsFailure(ctx);
     return;
   }

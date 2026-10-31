@@ -149,6 +149,7 @@ create table if not exists ig_connection (
   refreshed_at timestamptz,
   refresh_error text,
   token_error text,
+  api_host text,
   constraint ig_one check (id = 1)
 );
 

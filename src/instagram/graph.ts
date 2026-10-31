@@ -1,8 +1,18 @@
-import { GRAPH_BASE, GRAPH_VERSION } from "../domain/constants";
+import { FACEBOOK_GRAPH_BASE, FACEBOOK_GRAPH_VERSION, GRAPH_BASE, GRAPH_VERSION } from "../domain/constants";
+
+export type GraphHost = "instagram" | "facebook";
+
+export function graphOrigin(host?: GraphHost | null): string {
+  return host === "facebook" ? FACEBOOK_GRAPH_BASE : GRAPH_BASE;
+}
+
+export function graphVersion(host?: GraphHost | null): string {
+  return host === "facebook" ? FACEBOOK_GRAPH_VERSION : GRAPH_VERSION;
+}
 
 /** Graph URL with query fields only. The access token belongs in Authorization, never the query string. */
-export function graphUrl(path: string, query?: Record<string, string>): string {
-  const url = new URL(`${GRAPH_BASE}/${GRAPH_VERSION}/${path.replace(/^\//, "")}`);
+export function graphUrl(path: string, query?: Record<string, string>, host?: GraphHost | null): string {
+  const url = new URL(`${graphOrigin(host)}/${graphVersion(host)}/${path.replace(/^\//, "")}`);
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (key === "access_token") continue;

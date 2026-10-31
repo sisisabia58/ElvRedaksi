@@ -26,6 +26,7 @@ export type Settings = {
   hasLogo: boolean;
   publicBaseUrl: string;
   igUsername: string | null;
+  igUserId: string | null;
   igStatus: string | null;
   igWarning: string | null;
   igNeedsToken: boolean;
@@ -33,7 +34,7 @@ export type Settings = {
 
 export type SettingsInput = Omit<
   Settings,
-  "igUsername" | "hasLogo" | "igStatus" | "igWarning" | "igNeedsToken"
+  "igUsername" | "igUserId" | "hasLogo" | "igStatus" | "igWarning" | "igNeedsToken"
 >;
 
 const settingsSchema = z.object({
@@ -74,7 +75,9 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     has_logo: boolean;
     public_base_url: string;
     ig_username: string | null;
+    ig_user_id: string | null;
     ig_access_token: string | null;
+    ig_api_host: string | null;
     ig_checked_at: Date | string | null;
     ig_expires_at: Date | string | null;
     ig_token_error: string | null;
@@ -83,7 +86,8 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     `select b.name, b.handle, b.initial, b.accent, b.kicker, b.work_start, b.work_end,
             b.pass_threshold, b.default_format, b.default_template, b.slide_count,
             (b.logo is not null) as has_logo, b.public_base_url,
-            ig.username as ig_username, ig.access_token as ig_access_token,
+            ig.username as ig_username, ig.ig_user_id, ig.access_token as ig_access_token,
+            ig.api_host as ig_api_host,
             ig.checked_at as ig_checked_at, ig.expires_at as ig_expires_at,
             ig.token_error as ig_token_error, ig.refresh_error as ig_refresh_error
      from brand b
@@ -100,6 +104,7 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     expiresAt,
     tokenError: row.ig_token_error,
     refreshError: row.ig_refresh_error,
+    neverExpires: row.ig_api_host === "facebook",
   });
   return {
     name: row.name,
@@ -116,6 +121,7 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     hasLogo: Boolean(row.has_logo),
     publicBaseUrl: resolvePublicBaseUrl(row.public_base_url),
     igUsername: row.ig_username,
+    igUserId: row.ig_user_id,
     igStatus: ig.status,
     igWarning: ig.warning,
     igNeedsToken: ig.needsToken,
@@ -188,7 +194,7 @@ export async function restoreDefaultLogo(sql: Sql, role: Role): Promise<void> {
 export async function saveInstagramToken(
   sql: Sql,
   role: Role,
-  input: { igUserId: string; accessToken: string; username: string },
+  input: { igUserId: string; accessToken: string; username: string; apiHost?: "instagram" | "facebook" },
 ): Promise<void> {
   if (!can(role, "settings.write")) {
     throw new Error("forbidden");
@@ -200,7 +206,7 @@ export async function saveInstagramToken(
       `update ig_connection
        set ig_user_id = null, access_token = null, username = null, connected_at = null,
            expires_at = null, checked_at = null, refreshed_at = null,
-           refresh_error = null, token_error = null
+           refresh_error = null, token_error = null, api_host = null
        where id = 1`,
     );
     return;
@@ -209,27 +215,36 @@ export async function saveInstagramToken(
   if (!username) {
     throw new Error("Nama pengguna Instagram wajib diisi.");
   }
+  const apiHost = input.apiHost === "facebook" ? "facebook" : "instagram";
   await sql.rows(
     `update ig_connection
      set ig_user_id = $1, access_token = $2, username = $3, connected_at = now(),
          checked_at = now(), expires_at = $4, refreshed_at = null,
-         refresh_error = null, token_error = null
+         refresh_error = null, token_error = null, api_host = $5
      where id = 1`,
-    [igUserId, sealAccessToken(accessToken), username, new Date(Date.now() + ASSUMED_TOKEN_TTL_MS)],
+    [
+      igUserId,
+      sealAccessToken(accessToken),
+      username,
+      apiHost === "facebook" ? null : new Date(Date.now() + ASSUMED_TOKEN_TTL_MS),
+      apiHost,
+    ],
   );
 }
 
-/** Validates the token with Instagram, then stores the id and username Instagram returns. */
+/** Validates the token, then stores the id, username, and which Graph host answered. */
 export async function connectInstagram(
   sql: Sql,
   role: Role,
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
+  igUserId = "",
 ): Promise<void> {
-  const profile = await validateInstagramToken(accessToken, fetchImpl);
+  const profile = await validateInstagramToken(accessToken, fetchImpl, igUserId);
   await saveInstagramToken(sql, role, {
     igUserId: profile.userId,
     accessToken,
     username: profile.username,
+    apiHost: profile.host,
   });
 }

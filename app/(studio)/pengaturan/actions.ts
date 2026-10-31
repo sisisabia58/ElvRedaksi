@@ -86,10 +86,13 @@ export async function queueBeritaProRerenderAction(): Promise<ActionResult & { q
   }
 }
 
-export async function saveInstagramConnectAction(accessToken: string): Promise<ActionResult> {
+export async function saveInstagramConnectAction(
+  accessToken: string,
+  igUserId = "",
+): Promise<ActionResult> {
   try {
     const { sql, user } = await requireAdmin();
-    await connectInstagram(sql, user.role, accessToken);
+    await connectInstagram(sql, user.role, accessToken, fetch, igUserId);
     revalidatePath("/pengaturan");
     return { ok: true };
   } catch (error) {

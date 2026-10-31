@@ -1,4 +1,5 @@
-import { bearerInit, graphUrl } from "../instagram/graph";
+import { bearerInit, graphUrl, type GraphHost } from "../instagram/graph";
+import { TOKEN_RECONNECT } from "../instagram/token";
 
 export type PublishInput = {
   igUserId: string;
@@ -7,6 +8,7 @@ export type PublishInput = {
   caption: string;
   altTexts: string[];
   shareToStory: boolean;
+  graphHost?: GraphHost | null;
 };
 
 export type PublishResult = {
@@ -31,7 +33,7 @@ function sleep(ms: number): Promise<void> {
 type GraphBody = {
   id?: unknown;
   status_code?: unknown;
-  error?: { message?: unknown };
+  error?: { message?: unknown; code?: unknown };
   data?: { quota_usage?: unknown; config?: { quota_total?: unknown } }[];
 };
 
@@ -56,6 +58,10 @@ export class FakePublisher implements Publisher {
   }
 }
 
+function throwIfReconnect(body: GraphBody | null): void {
+  if (body?.error?.code === 190) throw new Error(TOKEN_RECONNECT);
+}
+
 export class MetaPublisher implements Publisher {
   constructor(
     private readonly fetchImpl: typeof fetch,
@@ -63,11 +69,12 @@ export class MetaPublisher implements Publisher {
   ) {}
 
   async publish(input: PublishInput): Promise<PublishResult> {
-    await this.assertQuota(input);
+    const host = input.graphHost ?? "instagram";
+    await this.assertQuota(input, host);
 
     const childIds: string[] = [];
     for (let index = 0; index < input.imageUrls.length; index++) {
-      const id = await this.postForId(`${input.igUserId}/media`, input.accessToken, {
+      const id = await this.postForId(`${input.igUserId}/media`, input.accessToken, host, {
         image_url: input.imageUrls[index],
         is_carousel_item: true,
         alt_text: input.altTexts[index] ?? "",
@@ -75,16 +82,16 @@ export class MetaPublisher implements Publisher {
       childIds.push(id);
     }
     for (const id of childIds) {
-      await this.poll(input.accessToken, id);
+      await this.poll(input.accessToken, id, host);
     }
 
-    const parentId = await this.postForId(`${input.igUserId}/media`, input.accessToken, {
+    const parentId = await this.postForId(`${input.igUserId}/media`, input.accessToken, host, {
       media_type: "CAROUSEL",
       children: childIds.join(","),
       caption: input.caption,
     });
-    await this.poll(input.accessToken, parentId);
-    const mediaId = await this.postForId(`${input.igUserId}/media_publish`, input.accessToken, {
+    await this.poll(input.accessToken, parentId, host);
+    const mediaId = await this.postForId(`${input.igUserId}/media_publish`, input.accessToken, host, {
       creation_id: parentId,
     });
 
@@ -93,12 +100,12 @@ export class MetaPublisher implements Publisher {
     }
 
     try {
-      const storyId = await this.postForId(`${input.igUserId}/media`, input.accessToken, {
+      const storyId = await this.postForId(`${input.igUserId}/media`, input.accessToken, host, {
         media_type: "STORIES",
         image_url: input.imageUrls[0],
       });
-      await this.poll(input.accessToken, storyId);
-      const storyMediaId = await this.postForId(`${input.igUserId}/media_publish`, input.accessToken, {
+      await this.poll(input.accessToken, storyId, host);
+      const storyMediaId = await this.postForId(`${input.igUserId}/media_publish`, input.accessToken, host, {
         creation_id: storyId,
       });
       return { mediaId, storyMediaId, storyError: null };
@@ -108,12 +115,13 @@ export class MetaPublisher implements Publisher {
     }
   }
 
-  private async assertQuota(input: PublishInput): Promise<void> {
+  private async assertQuota(input: PublishInput, host: GraphHost): Promise<void> {
     const url = graphUrl(`${input.igUserId}/content_publishing_limit`, {
       fields: "quota_usage,config",
-    });
+    }, host);
     const res = await this.fetchImpl(url, bearerInit(input.accessToken));
     const body = await readBody(res);
+    throwIfReconnect(body);
     const usage = body?.data?.[0]?.quota_usage;
     const total = body?.data?.[0]?.config?.quota_total;
     if (typeof usage === "number" && typeof total === "number" && usage >= total) {
@@ -121,15 +129,16 @@ export class MetaPublisher implements Publisher {
     }
   }
 
-  private async poll(accessToken: string, id: string): Promise<void> {
+  private async poll(accessToken: string, id: string, host: GraphHost): Promise<void> {
     const checks = CONTAINER_POLL_DELAYS_MS.length + 1;
     for (let attempt = 0; attempt < checks; attempt++) {
       if (attempt > 0) {
         await this.sleepImpl(CONTAINER_POLL_DELAYS_MS[attempt - 1]);
       }
-      const url = graphUrl(id, { fields: "status_code" });
+      const url = graphUrl(id, { fields: "status_code" }, host);
       const res = await this.fetchImpl(url, bearerInit(accessToken));
       const body = await readBody(res);
+      throwIfReconnect(body);
       const status = body?.status_code;
       if (status === "FINISHED") {
         return;
@@ -141,13 +150,19 @@ export class MetaPublisher implements Publisher {
     throw new Error("Kontainer Instagram belum siap");
   }
 
-  private async postForId(path: string, accessToken: string, body: Record<string, unknown>): Promise<string> {
-    const res = await this.fetchImpl(graphUrl(path), bearerInit(accessToken, {
+  private async postForId(
+    path: string,
+    accessToken: string,
+    host: GraphHost,
+    body: Record<string, unknown>,
+  ): Promise<string> {
+    const res = await this.fetchImpl(graphUrl(path, undefined, host), bearerInit(accessToken, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }));
     const payload = await readBody(res);
+    throwIfReconnect(payload);
     if (typeof payload?.id === "string" && payload.id) {
       return payload.id;
     }
