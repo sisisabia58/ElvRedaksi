@@ -9,6 +9,7 @@ import {
   resolvePublicBaseUrl,
 } from "../src/domain/public-url";
 import { runInsights, runInstagramRefresh, runPublisher } from "../src/jobs/handlers";
+import { setPracticeMode } from "../src/publish/mode";
 import { CONTAINER_POLL_DELAYS_MS, FakePublisher, MetaPublisher } from "../src/publish/publisher";
 import { connectInstagram, getSettings, saveInstagramToken } from "../src/studio/settings";
 import {
@@ -92,6 +93,7 @@ describe("public url", () => {
        on conflict (id) do update set ig_user_id = $1, access_token = $2, username = $3`,
       ["1789", "tok-plain", "meja"],
     );
+    await setPracticeMode(sql, "admin", false);
     const publisher = new FakePublisher();
     await runPublisher({
       sql,
@@ -106,10 +108,7 @@ describe("public url", () => {
     const failed = await sql.rows<{ error: string }>("select error from drafts");
     expect(failed[0].error).toBe(LOCAL_PUBLIC_URL_ERROR);
 
-    await sql.rows(
-      `insert into brand (name, handle, initial, accent, kicker, public_base_url)
-       values ('A', '', 'A', '#4E708C', 'K', 'http://example.com')`,
-    );
+    await sql.rows("update brand set public_base_url = 'http://example.com' where id = 1");
     await sql.rows("update drafts set status = 'posting', error = null where id = $1", [draftId]);
     await runPublisher({
       sql,
@@ -141,6 +140,7 @@ describe("public url", () => {
     );
     process.env.META_PROVIDER = "meta";
     process.env.PUBLIC_BASE_URL = "https://studio.example";
+    await setPracticeMode(sql, "admin", false);
     const live = new FakePublisher();
     await runPublisher({
       sql,
@@ -186,7 +186,7 @@ describe("public url", () => {
     });
     expect(latihan.calls).toHaveLength(1);
     const posted = await sql.rows<{ status: string }>("select status from drafts where id = $1", [draftId2]);
-    expect(posted[0].status).toBe("posted");
+    expect(posted[0].status).toBe("simulasi");
   });
 });
 
@@ -321,6 +321,7 @@ describe("instagram token", () => {
     process.env.META_PROVIDER = "meta";
     process.env.TOKEN_ENCRYPTION_KEY = "unit-test-key";
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `update ig_connection
@@ -403,6 +404,7 @@ describe("instagram token", () => {
     expect(calls).toBe(0);
 
     process.env.META_PROVIDER = "meta";
+    await setPracticeMode(sql, "admin", false);
     await sql.rows("update ig_connection set connected_at = $1 where id = 1", [
       new Date(now.getTime() - 23 * 60 * 60 * 1000),
     ]);
@@ -521,6 +523,7 @@ describe("instagram token", () => {
   it("falls back when Facebook insights reject views and flags oauth 190", async () => {
     process.env.META_PROVIDER = "meta";
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `update ig_connection set ig_user_id = '1789', access_token = 'tok-suat', username = 'meja',
@@ -568,6 +571,7 @@ describe("instagram token", () => {
   it("does not refresh a non-expiring Facebook token", async () => {
     process.env.META_PROVIDER = "meta";
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `update ig_connection set access_token = 'tok-suat', ig_user_id = '1789', username = 'meja',
@@ -602,6 +606,11 @@ describe("instagram token", () => {
        where table_name = 'ig_connection' and column_name = 'api_host'`,
     );
     expect(host).toHaveLength(1);
+    const practice = await sql.rows<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_name = 'brand' and column_name = 'practice_mode'`,
+    );
+    expect(practice).toHaveLength(1);
   });
 });
 

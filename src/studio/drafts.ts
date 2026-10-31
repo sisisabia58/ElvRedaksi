@@ -5,6 +5,7 @@ import { draftAwaitsRewrite } from "../domain/placeholder";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { slidesForFormat, type SlideTemplate } from "../render/html";
 import { enqueue } from "../jobs/runner";
+import { livePublishBlock } from "../publish/mode";
 
 const COVER_PHOTO_DATA_URL =
   /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/;
@@ -522,6 +523,11 @@ export async function bulkApproveDrafts(sql: Sql, role: Role, ids: string[]): Pr
   });
 }
 
+async function assertLiveConnection(sql: Sql): Promise<void> {
+  const block = await livePublishBlock(sql);
+  if (block) throw new Error(block);
+}
+
 export async function scheduleDraftInTx(
   tx: Sql,
   role: Role,
@@ -529,6 +535,7 @@ export async function scheduleDraftInTx(
   scheduledAt: Date,
 ): Promise<void> {
   requirePublish(role);
+  await assertLiveConnection(tx);
   const row = await loadDraftRow(tx, id);
   blockIfDirty(row.text_dirty);
   blockIfPlaceholder(parseSlides(row.slides));
@@ -620,6 +627,7 @@ async function postDraftNowInTx(tx: Sql, id: string, row: DraftRow, now: Date): 
 
 export async function postDraftNow(sql: Sql, role: Role, id: string): Promise<void> {
   requirePublish(role);
+  await assertLiveConnection(sql);
   const row = await loadDraftRow(sql, id);
   blockIfDirty(row.text_dirty);
   blockIfPlaceholder(parseSlides(row.slides));
@@ -736,6 +744,7 @@ async function retryFailedInTx(tx: Sql, id: string, now: Date): Promise<void> {
 
 export async function retryFailed(sql: Sql, role: Role, id: string): Promise<void> {
   requirePublish(role);
+  await assertLiveConnection(sql);
   const row = await loadDraftRow(sql, id);
   blockIfDirty(row.text_dirty);
   blockIfPlaceholder(parseSlides(row.slides));

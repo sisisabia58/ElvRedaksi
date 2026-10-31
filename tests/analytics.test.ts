@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createTestSql } from "../src/db/client";
-import { analyticsView, followerLineCoordinates } from "../src/studio/analytics";
 import { runInsights } from "../src/jobs/handlers";
+import { setPracticeMode } from "../src/publish/mode";
+import { analyticsView, followerLineCoordinates } from "../src/studio/analytics";
 
 async function withMeta(run: () => Promise<void>): Promise<void> {
   const previous = process.env.META_PROVIDER;
@@ -59,6 +60,7 @@ describe("analytics", () => {
   it("does not invent numbers when Instagram rejects the token", async () => {
     await withMeta(async () => {
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `insert into ig_connection (id, ig_user_id, access_token, username)
@@ -89,6 +91,7 @@ describe("analytics", () => {
   it("keeps the sync cadence when Instagram is unreachable", async () => {
     await withMeta(async () => {
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `insert into ig_connection (id, ig_user_id, access_token, username)
@@ -133,6 +136,7 @@ describe("analytics", () => {
   it("dates a day by the period it covers and does not copy today's followers backward", async () => {
     await withMeta(async () => {
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `insert into ig_connection (id, ig_user_id, access_token, username)
@@ -185,6 +189,7 @@ describe("analytics", () => {
   it("copies a previously measured follower count and still stamps today with the live count", async () => {
     await withMeta(async () => {
     const sql = await createTestSql();
+    await setPracticeMode(sql, "admin", false);
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
       `insert into ig_connection (id, ig_user_id, access_token, username)

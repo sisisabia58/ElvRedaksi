@@ -15,6 +15,7 @@ import { bearerInit, graphUrl, type GraphHost } from "../instagram/graph";
 import { IG_REFRESH_INTERVAL_MS, TOKEN_RECONNECT, refreshStoredInstagramToken } from "../instagram/token";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
+import { PUBLISH_DISCONNECTED, TOKEN_UNREADABLE_PUBLISH, readPracticeMode } from "../publish/mode";
 import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from "../publish/publisher";
 import { clampSlideCount } from "../domain/brand";
 import { renderSlideHtml, safePhotoDataUrl, slidesForFormat, type SlideTemplate } from "../render/html";
@@ -1006,6 +1007,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     ig_user_id: string | null;
     access_token: string | null;
     api_host: string | null;
+    token_error: string | null;
     ig_media_id: string | null;
     story_media_id: string | null;
     story_error: string | null;
@@ -1013,7 +1015,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     `select d.status, d.caption, d.hashtags, d.slides, d.format, d.template, d.share_to_story,
             t.url as topic_url, s.name as source_name,
             b.public_base_url, b.slide_count,
-            i.ig_user_id, i.access_token, i.api_host,
+            i.ig_user_id, i.access_token, i.api_host, i.token_error,
             d.ig_media_id, d.story_media_id, d.story_error
      from drafts d
      join topics t on t.id = d.topic_id
@@ -1028,7 +1030,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     throw new Error("draft tidak ditemukan");
   }
 
-  if (draft.status === "posted" || draft.status === "failed") {
+  if (draft.status === "posted" || draft.status === "simulasi" || draft.status === "failed") {
     return;
   }
   if (draft.status === "scheduled") {
@@ -1051,7 +1053,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
       mediaId: draft.ig_media_id,
       storyMediaId: draft.story_media_id,
       storyError: draft.story_error,
-    });
+    }, draft.ig_media_id.startsWith("fake_"));
     return;
   }
 
@@ -1069,27 +1071,30 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     return;
   }
 
+  const practice = await readPracticeMode(ctx.sql);
   const storedToken = draft.access_token?.trim() ?? "";
   const accessToken = openAccessToken(storedToken);
-  if (process.env.META_PROVIDER === "meta" && !accessToken) {
-    assertTransition("worker", "posting", "failed");
-    await ctx.sql.rows(
-      `update drafts set status = 'failed', error = $1, updated_at = $2
-       where id = $3 and status = 'posting'`,
-      [
-        isSealedAccessToken(storedToken)
-          ? "Token Instagram tidak bisa dibaca. Set TOKEN_ENCRYPTION_KEY atau CRON_SECRET."
-          : "Instagram belum terhubung",
-        ctx.now,
-        draftId,
-      ],
-    );
-    return;
+  const igUserId = draft.ig_user_id?.trim() ?? "";
+  if (!practice) {
+    const block = !accessToken
+      ? isSealedAccessToken(storedToken)
+        ? TOKEN_UNREADABLE_PUBLISH
+        : PUBLISH_DISCONNECTED
+      : !igUserId
+        ? PUBLISH_DISCONNECTED
+        : draft.token_error;
+    if (block) {
+      assertTransition("worker", "posting", "failed");
+      await ctx.sql.rows(
+        `update drafts set status = 'failed', error = $1, updated_at = $2
+         where id = $3 and status = 'posting'`,
+        [block, ctx.now, draftId],
+      );
+      return;
+    }
   }
 
-  const publisher =
-    ctx.publisher ??
-    (process.env.META_PROVIDER === "meta" ? new MetaPublisher(fetch) : new FakePublisher());
+  const publisher = ctx.publisher ?? (practice ? new FakePublisher() : new MetaPublisher(fetch));
 
   let result: PublishResult;
   try {
@@ -1101,7 +1106,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
       [draftId],
     );
     const publicBaseUrl = resolvePublicBaseUrl(draft.public_base_url);
-    if (process.env.META_PROVIDER === "meta") {
+    if (!practice) {
       const urlError = publicUrlPublishError(publicBaseUrl);
       if (urlError) throw new Error(urlError);
     }
@@ -1145,26 +1150,29 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     throw new Error("Status draf sudah berubah");
   }
   if (result.storyError === TOKEN_RECONNECT) await markTokenReconnect(ctx.sql);
-  await finishPostingDraft(ctx, draftId, {
-    mediaId: result.mediaId,
-    storyMediaId: result.storyMediaId,
-    storyError: result.storyError,
-  });
+  await finishPostingDraft(
+    ctx,
+    draftId,
+    result,
+    practice || result.mediaId.startsWith("fake_"),
+  );
 }
 
 async function finishPostingDraft(
   ctx: JobCtx,
   draftId: string,
   result: PublishResult,
+  simulated: boolean,
 ): Promise<void> {
-  assertTransition("worker", "posting", "posted");
+  const next = simulated ? "simulasi" : "posted";
+  assertTransition("worker", "posting", next);
   const posted = await ctx.sql.rows<{ id: string }>(
     `update drafts
-     set status = 'posted', ig_media_id = $1, story_media_id = $2, story_error = $3,
-         posted_at = $4, updated_at = $4, error = null
-     where id = $5 and status = 'posting'
+     set status = $1, ig_media_id = $2, story_media_id = $3, story_error = $4,
+         posted_at = $5, updated_at = $5, error = null
+     where id = $6 and status = 'posting'
      returning id`,
-    [result.mediaId, result.storyMediaId, result.storyError, ctx.now, draftId],
+    [next, result.mediaId, result.storyMediaId, result.storyError, ctx.now, draftId],
   );
   if (posted.length === 0) {
     throw new Error("Status draf sudah berubah");
@@ -1389,8 +1397,8 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
     return;
   }
 
-  // Latihan mode may validate a token when it is saved. It must not pull insights.
-  if (process.env.META_PROVIDER !== "meta" || connection?.token_error === TOKEN_RECONNECT) {
+  // Mode latihan may validate a token when it is saved. It must not pull insights.
+  if ((await readPracticeMode(ctx.sql)) || connection?.token_error === TOKEN_RECONNECT) {
     await enqueueNextInsights(ctx);
     return;
   }

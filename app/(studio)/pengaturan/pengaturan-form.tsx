@@ -12,7 +12,16 @@ import {
   saveInstagramConnectAction,
   saveLogoAction,
   saveSettingsAction,
+  setPracticeModeAction,
 } from "./actions";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { RegenerateDemoButton } from "@/components/studio/regenerate-demo-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,14 +49,12 @@ function brandFromSettings(settings: Settings): SettingsInput {
 
 export function PengaturanForm({
   settings,
-  showMetaBanner,
   llmBanner,
   geminiPause,
   demoReviewCount,
   regenerateProgress,
 }: {
   settings: Settings;
-  showMetaBanner: boolean;
   llmBanner: string | null;
   geminiPause?: string | null;
   demoReviewCount: number;
@@ -70,6 +77,9 @@ export function PengaturanForm({
   const [brand, setBrand] = useState<SettingsInput>(() => brandFromSettings(settings));
   const [igUserId, setIgUserId] = useState(settings.igUserId ?? "");
   const [igToken, setIgToken] = useState("");
+  const [confirmLive, setConfirmLive] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
+  const account = settings.igUsername?.trim().replace(/^@/, "") ?? "";
 
   function onBrandSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -123,11 +133,117 @@ export function PengaturanForm({
         Pengaturan
       </h1>
 
-      {showMetaBanner ? (
-        <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
-          Mode latihan: posting tidak dikirim ke Instagram.
+      <p
+        className={`text-sm rounded-lg border px-4 py-3 ${
+          settings.effectivePractice
+            ? "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]"
+            : "border-amber-500/60 bg-amber-500/10 text-amber-100"
+        }`}
+      >
+        {settings.modeBanner}
+      </p>
+      <section className="space-y-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+          Mode latihan
+        </h2>
+        <p className="text-sm text-[var(--muted)]">
+          {settings.effectivePractice
+            ? "Posting memakai penyimpanan lokal. Instagram tidak menerima apa pun."
+            : "Mode siaran. Hanya draf yang kamu posting atau jadwalkan yang terkirim."}
         </p>
-      ) : null}
+        {settings.envLocksPractice ? (
+          <p className="text-sm text-amber-100">Dikunci oleh server.</p>
+        ) : null}
+        {modeError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {modeError}
+          </p>
+        ) : null}
+        {settings.effectivePractice ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending || (settings.envLocksPractice && settings.practiceMode)}
+            onClick={() => {
+              if (settings.envLocksPractice) return;
+              setModeError(null);
+              setConfirmLive(true);
+            }}
+          >
+            Matikan Mode latihan
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            disabled={pending}
+            onClick={() => {
+              setModeError(null);
+              startTransition(async () => {
+                const result = await setPracticeModeAction(true);
+                if (result.ok) {
+                  router.refresh();
+                } else {
+                  setModeError(result.error);
+                }
+              });
+            }}
+          >
+            Nyalakan Mode latihan
+          </Button>
+        )}
+        {settings.envLocksPractice && !settings.practiceMode ? (
+          <Button
+            type="button"
+            disabled={pending}
+            onClick={() => {
+              setModeError(null);
+              startTransition(async () => {
+                const result = await setPracticeModeAction(true);
+                if (result.ok) router.refresh();
+                else setModeError(result.error);
+              });
+            }}
+          >
+            Nyalakan Mode latihan
+          </Button>
+        ) : null}
+      </section>
+      <Dialog open={confirmLive} onOpenChange={setConfirmLive}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Matikan Mode latihan?</DialogTitle>
+            <DialogDescription>
+              {account
+                ? `Posting berikutnya akan dikirim ke Instagram sebagai @${account}. Draf yang sudah dijadwalkan ikut terkirim tanpa tombol lain.`
+                : "Akun Instagram belum terhubung. Posting tetap diblokir sampai koneksi valid."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setConfirmLive(false)}>
+              Batal
+            </Button>
+            <Button
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                startTransition(async () => {
+                  const result = await setPracticeModeAction(false);
+                  if (result.ok) {
+                    setConfirmLive(false);
+                    setModeError(null);
+                    router.refresh();
+                  } else {
+                    setModeError(result.error);
+                    setConfirmLive(false);
+                  }
+                });
+              }}
+            >
+              Matikan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {llmBanner ? (
         <p className="text-sm rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-[var(--muted)]">
           {llmBanner}

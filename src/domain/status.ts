@@ -5,6 +5,7 @@ export const DRAFT_STATUSES = [
   "scheduled",
   "posting",
   "posted",
+  "simulasi",
   "failed",
   "rejected",
 ] as const;
@@ -16,8 +17,9 @@ const EDGES: Record<DraftStatus, DraftStatus[]> = {
   needs_review: ["approved", "scheduled", "rejected", "posted"],
   approved: ["scheduled", "posting", "rejected", "posted", "needs_review"],
   scheduled: ["posting", "needs_review", "rejected", "posted"],
-  posting: ["posted", "failed"],
+  posting: ["posted", "simulasi", "failed"],
   posted: [],
+  simulasi: [],
   failed: ["posting", "needs_review"],
   rejected: ["needs_review"],
 };
@@ -26,6 +28,7 @@ const WORKER_ALLOW = new Set([
   "drafted>needs_review",
   "scheduled>posting",
   "posting>posted",
+  "posting>simulasi",
   "posting>failed",
 ]);
 

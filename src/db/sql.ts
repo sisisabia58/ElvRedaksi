@@ -15,6 +15,7 @@ create table if not exists brand (
   logo bytea,
   logo_type text,
   public_base_url text not null default 'http://127.0.0.1:43123',
+  practice_mode boolean not null default true,
   constraint brand_one check (id = 1)
 );
 

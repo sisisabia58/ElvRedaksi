@@ -30,6 +30,7 @@ const TAB_STATUSES: { status: DraftStatus; label: string }[] = [
   { status: "scheduled", label: "Terjadwal" },
   { status: "failed", label: "Gagal posting" },
   { status: "posted", label: "Sudah posting" },
+  { status: "simulasi", label: "Simulasi" },
   { status: "rejected", label: "Ditolak" },
 ];
 

@@ -9,6 +9,7 @@ import {
   describeInstagramConnection,
   validateInstagramToken,
 } from "../instagram/token";
+import { envForcesPractice, isPracticeMode, practiceBanner } from "../publish/mode";
 import { readDefaultLogo } from "../render/brand-logo";
 
 export type Settings = {
@@ -30,11 +31,24 @@ export type Settings = {
   igStatus: string | null;
   igWarning: string | null;
   igNeedsToken: boolean;
+  practiceMode: boolean;
+  envLocksPractice: boolean;
+  effectivePractice: boolean;
+  modeBanner: string;
 };
 
 export type SettingsInput = Omit<
   Settings,
-  "igUsername" | "igUserId" | "hasLogo" | "igStatus" | "igWarning" | "igNeedsToken"
+  | "igUsername"
+  | "igUserId"
+  | "hasLogo"
+  | "igStatus"
+  | "igWarning"
+  | "igNeedsToken"
+  | "practiceMode"
+  | "envLocksPractice"
+  | "effectivePractice"
+  | "modeBanner"
 >;
 
 const settingsSchema = z.object({
@@ -74,6 +88,7 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     slide_count: number;
     has_logo: boolean;
     public_base_url: string;
+    practice_mode: boolean | null;
     ig_username: string | null;
     ig_user_id: string | null;
     ig_access_token: string | null;
@@ -85,7 +100,7 @@ export async function getSettings(sql: Sql): Promise<Settings> {
   }>(
     `select b.name, b.handle, b.initial, b.accent, b.kicker, b.work_start, b.work_end,
             b.pass_threshold, b.default_format, b.default_template, b.slide_count,
-            (b.logo is not null) as has_logo, b.public_base_url,
+            (b.logo is not null) as has_logo, b.public_base_url, b.practice_mode,
             ig.username as ig_username, ig.ig_user_id, ig.access_token as ig_access_token,
             ig.api_host as ig_api_host,
             ig.checked_at as ig_checked_at, ig.expires_at as ig_expires_at,
@@ -106,6 +121,8 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     refreshError: row.ig_refresh_error,
     neverExpires: row.ig_api_host === "facebook",
   });
+  const envLocksPractice = envForcesPractice();
+  const effectivePractice = isPracticeMode(row.practice_mode);
   return {
     name: row.name,
     handle: row.handle,
@@ -125,6 +142,14 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     igStatus: ig.status,
     igWarning: ig.warning,
     igNeedsToken: ig.needsToken,
+    practiceMode: row.practice_mode !== false,
+    envLocksPractice,
+    effectivePractice,
+    modeBanner: practiceBanner({
+      practice: effectivePractice,
+      envLocked: envLocksPractice,
+      username: row.ig_username,
+    }),
   };
 }
 

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getAppSql } from "@/src/auth/app-sql";
 import { can } from "@/src/auth/rbac";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
+import { livePublishBlock, practiceBanner, readPracticeMode, envForcesPractice } from "@/src/publish/mode";
 import { getDraft } from "@/src/studio/drafts";
 import { EditorPanel } from "./editor-panel";
 
@@ -23,6 +24,11 @@ export default async function ReviewEditorPage({ params }: PageParams) {
     notFound();
   }
 
+  const practice = await readPracticeMode(sql);
+  const igRows = await sql.rows<{ username: string | null }>(
+    "select username from ig_connection where id = 1",
+  );
+  const block = await livePublishBlock(sql);
   const usePublicMedia = draft.status === "posted" || draft.status === "posting";
 
   return (
@@ -52,6 +58,12 @@ export default async function ReviewEditorPage({ params }: PageParams) {
       }}
       canPublish={can(user.role, "publish")}
       canWrite={can(user.role, "review.write")}
+      modeBanner={practiceBanner({
+        practice,
+        envLocked: envForcesPractice(),
+        username: igRows[0]?.username ?? null,
+      })}
+      blockPublish={block != null}
     />
   );
 }

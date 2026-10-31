@@ -91,10 +91,10 @@ describe("publisher", () => {
       publisher: new FakePublisher(),
     });
     const row = await sql.rows<{ status: string; ig_media_id: string }>("select status, ig_media_id from drafts");
-    expect(row[0].status).toBe("posted");
+    expect(row[0].status).toBe("simulasi");
     expect(row[0].ig_media_id.startsWith("fake_")).toBe(true);
     const items = await weekItems(sql, new Date("2026-10-26T00:00:00Z"));
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(0);
   });
 
   it("finishes a posting draft that already has an Instagram media id without publishing again", async () => {
@@ -228,7 +228,7 @@ describe("publisher", () => {
     const row = await sql.rows<{ status: string; ig_media_id: string }>(
       "select status, ig_media_id from drafts",
     );
-    expect(row[0].status).toBe("posted");
+    expect(row[0].status).toBe("simulasi");
     expect(row[0].ig_media_id.startsWith("fake_")).toBe(true);
   });
 

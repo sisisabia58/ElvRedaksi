@@ -1,5 +1,6 @@
 import { isSealedAccessToken, openAccessToken, sealAccessToken } from "../auth/token-cipher";
 import type { Sql } from "../db/client";
+import { readPracticeMode } from "../publish/mode";
 import { TIME_ZONE } from "../domain/constants";
 import { bearerInit, graphUrl, refreshAccessTokenUrl, type GraphHost } from "./graph";
 
@@ -223,13 +224,13 @@ async function markRefreshFailed(sql: Sql): Promise<void> {
   await sql.rows(`update ig_connection set refresh_error = $1 where id = 1`, [REFRESH_FAILED]);
 }
 
-/** Daily refresh. No Meta call unless META_PROVIDER=meta, the token is at least 24h old, and it expires within 30 days. */
+/** Daily refresh. No Meta call in Mode latihan, on the Facebook path, or until the token is 24h old and inside 30 days of expiry. */
 export async function refreshStoredInstagramToken(
   sql: Sql,
   now: Date,
   fetchImpl: typeof fetch,
 ): Promise<void> {
-  if (process.env.META_PROVIDER !== "meta") return;
+  if (await readPracticeMode(sql)) return;
   const rows = await sql.rows<{
     access_token: string | null;
     expires_at: Date | string | null;

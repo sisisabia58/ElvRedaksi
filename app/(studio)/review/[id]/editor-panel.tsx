@@ -92,10 +92,14 @@ export function EditorPanel({
   draft,
   canPublish,
   canWrite,
+  modeBanner,
+  blockPublish,
 }: {
   draft: DraftView;
   canPublish: boolean;
   canWrite: boolean;
+  modeBanner: string;
+  blockPublish: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -437,6 +441,10 @@ export function EditorPanel({
 
         <div className="space-y-4">
           <div className="text-sm space-y-1">
+            <p className={blockPublish ? "text-amber-100" : "text-[var(--muted)]"}>{modeBanner}</p>
+            {draft.status === "simulasi" ? (
+              <p className="text-[var(--muted)]">Simulasi. Tidak terkirim ke Instagram.</p>
+            ) : null}
             <p>
               Status: <span className="font-mono">{draft.status}</span>
               {draft.score != null ? (
@@ -462,7 +470,7 @@ export function EditorPanel({
               <Button
                 type="button"
                 size="sm"
-                disabled={pending || publishBlocked}
+                disabled={pending || publishBlocked || blockPublish}
                 onClick={() => run(() => postDraftNowAction(draft.id))}
               >
                 Posting sekarang
@@ -517,7 +525,7 @@ export function EditorPanel({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={pending || publishBlocked}
+                disabled={pending || publishBlocked || blockPublish}
                 onClick={() => run(() => retryFailedAction(draft.id))}
               >
                 Coba lagi
@@ -540,7 +548,7 @@ export function EditorPanel({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={pending || publishBlocked || !scheduleAt}
+                disabled={pending || publishBlocked || blockPublish || !scheduleAt}
                 onClick={() =>
                   run(() => scheduleDraftAction(draft.id, `${scheduleAt}+07:00`))
                 }

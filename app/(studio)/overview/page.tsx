@@ -15,6 +15,7 @@ import {
   rewriteQueueLabel,
   type AgentId,
 } from "@/src/studio/overview";
+import { envForcesPractice, practiceBanner, readPracticeMode } from "@/src/publish/mode";
 import { OverviewScanButton } from "./overview-scan-button";
 
 const AGENT_PRESENTATION: Record<AgentId, { label: string; color: string }> = {
@@ -38,7 +39,7 @@ function agentLabel(agent: string): { label: string; color: string } {
 export default async function OverviewPage() {
   const sql = await getAppSql();
   const now = new Date();
-  const [funnel, cards, activity, hourRows, geminiPause, queues] = await Promise.all([
+  const [funnel, cards, activity, hourRows, geminiPause, queues, practice, igRows] = await Promise.all([
     funnelCounts(sql, now),
     agentCards(sql, now),
     recentActivity(sql),
@@ -47,7 +48,14 @@ export default async function OverviewPage() {
     ),
     readGeminiPause(sql),
     newsroomQueues(sql),
+    readPracticeMode(sql),
+    sql.rows<{ username: string | null }>("select username from ig_connection where id = 1"),
   ]);
+  const modeLine = practiceBanner({
+    practice,
+    envLocked: envForcesPractice(),
+    username: igRows[0]?.username ?? null,
+  });
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   const user = token ? await userForToken(sql, token) : null;
@@ -79,6 +87,15 @@ export default async function OverviewPage() {
           <div className="flex flex-wrap gap-2">
             <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
               Mode: Semi-otomatis
+            </span>
+            <span
+              className={`rounded-full border px-3 py-1 text-xs ${
+                practice
+                  ? "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]"
+                  : "border-amber-500/60 bg-amber-500/10 text-amber-100"
+              }`}
+            >
+              {modeLine}
             </span>
             <span
               className={`rounded-full border px-3 py-1 text-xs ${

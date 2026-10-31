@@ -8,6 +8,7 @@ import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { queueBeritaProRerender } from "@/src/studio/rerender-template";
 import type { SettingsInput } from "@/src/studio/settings";
+import { setPracticeMode } from "@/src/publish/mode";
 import { connectInstagram, restoreDefaultLogo, saveBrandLogo, saveInstagramToken, saveSettings } from "@/src/studio/settings";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -34,6 +35,19 @@ async function requireAdmin() {
     throw new Error("forbidden");
   }
   return { sql, user };
+}
+
+export async function setPracticeModeAction(enabled: boolean): Promise<ActionResult> {
+  try {
+    const { sql, user } = await requireAdmin();
+    await setPracticeMode(sql, user.role, enabled);
+    revalidatePath("/pengaturan");
+    revalidatePath("/overview");
+    revalidatePath("/review");
+    return { ok: true };
+  } catch (error) {
+    return toActionResult(error);
+  }
 }
 
 export async function saveSettingsAction(input: SettingsInput): Promise<ActionResult> {

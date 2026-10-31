@@ -18,7 +18,6 @@ export default async function PengaturanPage() {
   }
 
   const settings = await getSettings(sql);
-  const showMetaBanner = (process.env.META_PROVIDER ?? "fake") !== "meta";
   const rewrite = await demoRewriteSnapshot(sql);
   const pause = await readGeminiPause(sql);
   const geminiPause = pause?.perDay ? pause.message : null;
@@ -26,7 +25,6 @@ export default async function PengaturanPage() {
   return (
     <PengaturanForm
       settings={settings}
-      showMetaBanner={showMetaBanner}
       llmBanner={studioModelLine(llmBanner().text, geminiPause)}
       geminiPause={geminiPause}
       demoReviewCount={rewrite.demoScores}

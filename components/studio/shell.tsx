@@ -3,6 +3,7 @@ import type { Role } from "@/src/auth/rbac";
 import { formatUsd } from "@/src/domain/metrics";
 import { navItems } from "@/src/studio/nav";
 import { llmBanner } from "@/src/llm/provider";
+import { envForcesPractice, practiceBanner, readPracticeMode } from "@/src/publish/mode";
 import { spendSummary } from "@/src/studio/spend";
 import { logout } from "@/app/(studio)/actions";
 import { StudioNavLinks } from "@/components/studio/nav-links";
@@ -39,6 +40,15 @@ export default async function Shell({
   const brandRows = await sql.rows<{ handle: string; name: string }>(
     "select handle, name from brand where id = 1",
   );
+  const igRows = await sql.rows<{ username: string | null }>(
+    "select username from ig_connection where id = 1",
+  );
+  const practice = await readPracticeMode(sql);
+  const modeLine = practiceBanner({
+    practice,
+    envLocked: envForcesPractice(),
+    username: igRows[0]?.username ?? null,
+  });
   const handle = brandRows[0]?.handle?.trim() ?? "";
   const brandName = brandRows[0]?.name?.trim() || "Analyst Digest";
   const spend = await spendSummary(sql, new Date());
@@ -86,6 +96,15 @@ export default async function Shell({
       </aside>
 
       <div className="flex flex-1 flex-col min-w-0">
+        <p
+          className={`border-b px-4 py-2 text-sm ${
+            practice
+              ? "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]"
+              : "border-amber-500/60 bg-amber-500/10 text-amber-100"
+          }`}
+        >
+          {modeLine}
+        </p>
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-4 py-3">
           <p className="text-sm text-[var(--muted)] md:hidden">
             <span className="font-semibold tracking-wide text-[var(--ink)]">{brandName}</span>
