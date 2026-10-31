@@ -22,9 +22,11 @@ describe("publisher", () => {
 
   it("stops when the Instagram quota is used up", async () => {
     const calls: string[] = [];
-    const fetchImpl: typeof fetch = async (input) => {
+    let authorization = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       calls.push(url);
+      authorization = new Headers(init?.headers).get("authorization") ?? "";
       if (url.includes("content_publishing_limit")) {
         return json({ data: [{ quota_usage: 100, config: { quota_total: 100 } }] });
       }
@@ -46,7 +48,8 @@ describe("publisher", () => {
     expect(limit).toBeTruthy();
     const fields = new URL(limit!).searchParams.get("fields") ?? "";
     expect(fields.split(",")).toEqual(expect.arrayContaining(["quota_usage", "config"]));
-    expect(new URL(limit!).searchParams.get("access_token")).toBe("token");
+    expect(new URL(limit!).searchParams.has("access_token")).toBe(false);
+    expect(authorization).toBe("Bearer token");
   });
 
   it("publishes a scheduled draft through the fake adapter", async () => {

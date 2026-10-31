@@ -3,7 +3,50 @@ import { createTestSql } from "../src/db/client";
 import { analyticsView, followerLineCoordinates } from "../src/studio/analytics";
 import { runInsights } from "../src/jobs/handlers";
 
+async function withMeta(run: () => Promise<void>): Promise<void> {
+  const previous = process.env.META_PROVIDER;
+  process.env.META_PROVIDER = "meta";
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) delete process.env.META_PROVIDER;
+    else process.env.META_PROVIDER = previous;
+  }
+}
+
 describe("analytics", () => {
+  it("does not call Instagram in latihan mode when a token is already stored", async () => {
+    const previous = process.env.META_PROVIDER;
+    process.env.META_PROVIDER = "fake";
+    try {
+      const sql = await createTestSql();
+      const now = new Date("2026-10-28T02:00:00Z");
+      await sql.rows(
+        `insert into ig_connection (id, ig_user_id, access_token, username)
+         values (1, $1, $2, $3)
+         on conflict (id) do update set ig_user_id = $1, access_token = $2, username = $3`,
+        ["1789", "token", "redaksi"],
+      );
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls += 1;
+        throw new Error("latihan must not call Meta");
+      };
+      await runInsights({ sql, payload: {}, manual: true, now, fetchImpl });
+      expect(calls).toBe(0);
+      const log = await sql.rows("select id from activity where agent = 'analitik'");
+      expect(log).toHaveLength(0);
+      const jobs = await sql.rows<{ run_at: string | Date }>(
+        "select run_at from jobs where name = 'insights.sync' and finished_at is null",
+      );
+      expect(jobs).toHaveLength(1);
+      expect(new Date(jobs[0].run_at).toISOString()).toBe(new Date(now.getTime() + 30 * 60 * 1000).toISOString());
+    } finally {
+      if (previous === undefined) delete process.env.META_PROVIDER;
+      else process.env.META_PROVIDER = previous;
+    }
+  });
+
   it("does not invent numbers when Instagram is disconnected", async () => {
     const sql = await createTestSql();
     await runInsights({ sql, payload: {}, manual: true, now: new Date("2026-10-28T02:00:00Z"), fetchImpl: fetch });
@@ -14,6 +57,7 @@ describe("analytics", () => {
   });
 
   it("does not invent numbers when Instagram rejects the token", async () => {
+    await withMeta(async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
@@ -39,9 +83,11 @@ describe("analytics", () => {
     );
     expect(jobs).toHaveLength(1);
     expect(new Date(jobs[0].run_at).toISOString()).toBe(new Date(now.getTime() + 30 * 60 * 1000).toISOString());
+    });
   });
 
   it("keeps the sync cadence when Instagram is unreachable", async () => {
+    await withMeta(async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
@@ -64,6 +110,7 @@ describe("analytics", () => {
     );
     expect(jobs).toHaveLength(1);
     expect(new Date(jobs[0].run_at).toISOString()).toBe(new Date(now.getTime() + 30 * 60 * 1000).toISOString());
+    });
   });
 
   it("computes a follower delta in people and a views delta in percent", async () => {
@@ -84,6 +131,7 @@ describe("analytics", () => {
   });
 
   it("dates a day by the period it covers and does not copy today's followers backward", async () => {
+    await withMeta(async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
@@ -131,9 +179,11 @@ describe("analytics", () => {
       { date: "2026-10-27", views: 40, reach: 30, followers: null },
       { date: "2026-10-28", views: 55, reach: 33, followers: 1280 },
     ]);
+    });
   });
 
   it("copies a previously measured follower count and still stamps today with the live count", async () => {
+    await withMeta(async () => {
     const sql = await createTestSql();
     const now = new Date("2026-10-28T02:00:00Z");
     await sql.rows(
@@ -194,6 +244,7 @@ describe("analytics", () => {
       { date: "2026-10-27", views: 40, reach: 30, followers: 1100 },
       { date: "2026-10-28", views: 55, reach: 33, followers: 1280 },
     ]);
+    });
   });
 
   it("leaves the follower delta null when the window's last point has no follower count", async () => {

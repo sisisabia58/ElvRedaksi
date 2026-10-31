@@ -20,7 +20,7 @@ const PREVIEW_PNG = Buffer.from(
   "base64",
 );
 
-const BOOT_JOBS: JobName[] = ["scout.scan", "insights.sync"];
+const BOOT_JOBS: JobName[] = ["scout.scan", "insights.sync", "ig.refresh"];
 
 function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -251,6 +251,11 @@ const SCHEMA_EXTRAS = [
     constraint gemini_gate_one check (id = 1)
   )`,
   "insert into gemini_gate (id) values (1) on conflict (id) do nothing",
+  "alter table ig_connection add column if not exists expires_at timestamptz",
+  "alter table ig_connection add column if not exists checked_at timestamptz",
+  "alter table ig_connection add column if not exists refreshed_at timestamptz",
+  "alter table ig_connection add column if not exists refresh_error text",
+  "alter table ig_connection add column if not exists token_error text",
 ];
 
 export async function ensureSchemaExtras(sql: Sql): Promise<void> {

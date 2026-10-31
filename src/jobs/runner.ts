@@ -11,7 +11,8 @@ export type JobName =
   | "copywriter.write"
   | "designer.render"
   | "publisher.publish"
-  | "insights.sync";
+  | "insights.sync"
+  | "ig.refresh";
 
 export type JobCtx = {
   sql: Sql;
@@ -48,7 +49,9 @@ type ClaimedJob = {
   lostLock: boolean;
 };
 
-const PUBLISHER_LOCK_STALE_MS = 60_000;
+// A carousel may poll several containers for ~72s each. Keep the lock longer
+// than that so a live publish is not reclaimed and marked failed.
+const PUBLISHER_LOCK_STALE_MS = 8 * 60_000;
 const DEFAULT_LOCK_STALE_MS = 3 * 60_000;
 const TICK_BUDGET_MS = 45_000;
 const CONCURRENCY = 4;

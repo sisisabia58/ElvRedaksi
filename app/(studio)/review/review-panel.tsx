@@ -119,7 +119,7 @@ export function ReviewPanel({
               href={`/review?status=${tab.status}`}
               className={`rounded-full border px-3 py-1 text-sm transition-colors ${
                 active
-                  ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--ink)]"
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--bg)]"
                   : "border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] hover:border-[var(--ink)]"
               }`}
             >

@@ -299,7 +299,7 @@ describe("berita pro", () => {
     );
     expect(draft).toEqual([{ template: "serif", status: "needs_review", text_dirty: false }]);
     const jobs = await sql.rows<{ name: string }>("select name from jobs order by name");
-    expect(jobs.map((job) => job.name)).toEqual(["insights.sync", "scout.scan"]);
+    expect(jobs.map((job) => job.name)).toEqual(["ig.refresh", "insights.sync", "scout.scan"]);
   });
 
   it("leaves a customised brand template alone", async () => {

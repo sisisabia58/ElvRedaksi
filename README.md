@@ -54,7 +54,7 @@ OPENAI_INPUT_USD_PER_MTOK=0.15
 OPENAI_OUTPUT_USD_PER_MTOK=0.60
 ```
 
-To publish for real, set `META_PROVIDER=meta` and save the Instagram user id plus access token in Pengaturan. The account must be Business or Creator. Calls go to `https://graph.instagram.com/v26.0`. TikTok and Reels are not part of this product.
+To publish for real, set `META_PROVIDER=meta`, set `PUBLIC_BASE_URL` to the public https origin Instagram can fetch, and save a long-lived Instagram Login token in Pengaturan. The account must be Business or Creator, with `instagram_business_basic`, `instagram_business_content_publish`, and `instagram_business_manage_insights`. Calls go to `https://graph.instagram.com/v26.0`. A short-lived token is rejected: exchanging it needs an app secret, which this app does not store. The token is encrypted at rest when `TOKEN_ENCRYPTION_KEY` or `CRON_SECRET` is set. A daily job refreshes it only while `META_PROVIDER=meta`. TikTok and Reels are not part of this product.
 
 ## Human approval
 

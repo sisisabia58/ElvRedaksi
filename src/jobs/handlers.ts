@@ -2,15 +2,17 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { parseCopy, type Slide } from "../agents/copywriter";
 import { analystSystem, copySystem } from "../agents/prompts";
 import { scoreTopic } from "../agents/analyst";
+import { openAccessToken, isSealedAccessToken } from "../auth/token-cipher";
 import { makeShortCode } from "../domain/code";
 import {
-  GRAPH_BASE,
-  GRAPH_VERSION,
   INSIGHTS_INTERVAL_MS,
   PASS_THRESHOLD_DEFAULT,
   SCOUT_INTERVAL_MS,
   TIME_ZONE,
 } from "../domain/constants";
+import { publicUrlPublishError, resolvePublicBaseUrl } from "../domain/public-url";
+import { bearerInit, graphUrl } from "../instagram/graph";
+import { IG_REFRESH_INTERVAL_MS, refreshStoredInstagramToken } from "../instagram/token";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
 import { FakePublisher, MetaPublisher, type Publisher, type PublishResult } from "../publish/publisher";
@@ -958,8 +960,6 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
 }
 
 
-const PUBLIC_BASE_FALLBACK = "http://127.0.0.1:43123";
-
 function asStringArray(raw: unknown): string[] {
   if (Array.isArray(raw)) {
     return raw.filter((item): item is string => typeof item === "string");
@@ -1068,12 +1068,20 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     return;
   }
 
-  if (process.env.META_PROVIDER === "meta" && draft.access_token == null) {
+  const storedToken = draft.access_token?.trim() ?? "";
+  const accessToken = openAccessToken(storedToken);
+  if (process.env.META_PROVIDER === "meta" && !accessToken) {
     assertTransition("worker", "posting", "failed");
     await ctx.sql.rows(
       `update drafts set status = 'failed', error = $1, updated_at = $2
        where id = $3 and status = 'posting'`,
-      ["Instagram belum terhubung", ctx.now, draftId],
+      [
+        isSealedAccessToken(storedToken)
+          ? "Token Instagram tidak bisa dibaca. Set TOKEN_ENCRYPTION_KEY atau CRON_SECRET."
+          : "Instagram belum terhubung",
+        ctx.now,
+        draftId,
+      ],
     );
     return;
   }
@@ -1091,7 +1099,11 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
       `select id, slide_index from assets where draft_id = $1 order by slide_index`,
       [draftId],
     );
-    const publicBaseUrl = (draft.public_base_url || PUBLIC_BASE_FALLBACK).replace(/\/$/, "");
+    const publicBaseUrl = resolvePublicBaseUrl(draft.public_base_url);
+    if (process.env.META_PROVIDER === "meta") {
+      const urlError = publicUrlPublishError(publicBaseUrl);
+      if (urlError) throw new Error(urlError);
+    }
     const imageUrls = assets.map((asset) => `${publicBaseUrl}/media/${asset.id}`);
     const selected = slidesForFormat(draft.format, asSlides(draft.slides), {
       template: draft.template as SlideTemplate,
@@ -1102,7 +1114,7 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     const caption = `${draft.caption}\n\n${hashtags.map((tag) => `#${tag}`).join(" ")}`;
     result = await publisher.publish({
       igUserId: draft.ig_user_id ?? "",
-      accessToken: draft.access_token ?? "",
+      accessToken,
       imageUrls,
       caption,
       altTexts,
@@ -1159,24 +1171,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function graphUrl(path: string, accessToken: string, query?: Record<string, string>): string {
-  const url = new URL(`${GRAPH_BASE}/${GRAPH_VERSION}/${path}`);
-  url.searchParams.set("access_token", accessToken);
-  if (query) {
-    for (const [key, value] of Object.entries(query)) {
-      url.searchParams.set(key, value);
-    }
-  }
-  return url.toString();
-}
-
 async function graphGet(
   fetchImpl: typeof fetch,
   path: string,
   accessToken: string,
   query?: Record<string, string>,
 ): Promise<unknown> {
-  const res = await fetchImpl(graphUrl(path, accessToken, query));
+  const res = await fetchImpl(graphUrl(path, query), bearerInit(accessToken));
   let body: unknown = null;
   try {
     body = await res.json();
@@ -1354,7 +1355,7 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
     `select ig_user_id, access_token from ig_connection where id = 1`,
   );
   const connection = rows[0];
-  const token = connection?.access_token?.trim() ?? "";
+  const token = openAccessToken(connection?.access_token);
   const igUserId = connection?.ig_user_id?.trim() ?? "";
   if (!token || !igUserId) {
     await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
@@ -1362,6 +1363,12 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
       "analitik",
       "Analitik dilewati: Instagram belum terhubung",
     ]);
+    await enqueueNextInsights(ctx);
+    return;
+  }
+
+  // Latihan mode may validate a token when it is saved. It must not pull insights.
+  if (process.env.META_PROVIDER !== "meta") {
     await enqueueNextInsights(ctx);
     return;
   }
@@ -1451,6 +1458,32 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
   await enqueueNextInsights(ctx);
 }
 
+async function enqueueNextIgRefresh(ctx: JobCtx): Promise<void> {
+  const pending = await ctx.sql.rows<{ id: string }>(
+    `select id from jobs
+     where name = 'ig.refresh' and finished_at is null and locked_at is null
+     limit 1`,
+  );
+  if (pending.length > 0) return;
+  await enqueue(ctx.sql, {
+    name: "ig.refresh",
+    payload: {},
+    runAt: new Date(ctx.now.getTime() + IG_REFRESH_INTERVAL_MS),
+    manual: false,
+  });
+}
+
+export async function runInstagramRefresh(ctx: JobCtx & { fetchImpl?: typeof fetch }): Promise<void> {
+  try {
+    await refreshStoredInstagramToken(ctx.sql, ctx.now, ctx.fetchImpl ?? fetch);
+  } catch {
+    await ctx.sql.rows(`update ig_connection set refresh_error = $1 where id = 1 and refresh_error is null`, [
+      "Pembaruan token Instagram gagal.",
+    ]);
+  }
+  await enqueueNextIgRefresh(ctx);
+}
+
 export const jobHandlers = {
   "scout.scan": runScoutCron,
   "analyst.score": runAnalyst,
@@ -1458,4 +1491,5 @@ export const jobHandlers = {
   "designer.render": runDesigner,
   "publisher.publish": runPublisher,
   "insights.sync": runInsights,
+  "ig.refresh": runInstagramRefresh,
 };

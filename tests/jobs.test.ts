@@ -12,6 +12,7 @@ const noopHandlers: JobDeps["handlers"] = {
   "designer.render": async () => {},
   "publisher.publish": async () => {},
   "insights.sync": async () => {},
+  "ig.refresh": async () => {},
 };
 
 describe("jobs", () => {
@@ -32,6 +33,7 @@ describe("jobs", () => {
           seen.push("publish");
         },
         "insights.sync": async () => {},
+        "ig.refresh": async () => {},
       },
     };
     const night = new Date("2026-10-27T16:00:00Z"); // 23:00 WIB
@@ -100,6 +102,7 @@ describe("jobs", () => {
         "insights.sync": async () => {
           throw new Error("meta down");
         },
+        "ig.refresh": async () => {},
       },
     };
     await runDueJobs(sql, new Date("2026-10-28T00:00:00Z"), deps);
@@ -202,9 +205,19 @@ describe("jobs", () => {
       );
     }
 
-    await job("11111111-1111-1111-1111-111111111111", "publisher.publish", new Date(now.getTime() - 61_000), null);
+    await job(
+      "11111111-1111-1111-1111-111111111111",
+      "publisher.publish",
+      new Date(now.getTime() - (8 * 60_000 + 1_000)),
+      null,
+    );
     await job("22222222-2222-2222-2222-222222222222", "publisher.publish", now, null);
-    await job("33333333-3333-3333-3333-333333333333", "publisher.publish", new Date(now.getTime() - 59_000), null);
+    await job(
+      "33333333-3333-3333-3333-333333333333",
+      "publisher.publish",
+      new Date(now.getTime() - (8 * 60_000 - 1_000)),
+      null,
+    );
     await job("44444444-4444-4444-4444-444444444444", "insights.sync", new Date(now.getTime() - 61_000), null);
     await job("55555555-5555-5555-5555-555555555555", "insights.sync", new Date(now.getTime() - 11 * 60_000), null);
     await job("66666666-6666-6666-6666-666666666666", "insights.sync", null, null);

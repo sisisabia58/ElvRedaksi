@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { can, type Role } from "../auth/rbac";
+import { openAccessToken, sealAccessToken } from "../auth/token-cipher";
 import { SLIDE_TEMPLATES, clampSlideCount, type SlideTemplateName } from "../domain/brand";
+import { resolvePublicBaseUrl } from "../domain/public-url";
 import type { Sql } from "../db/client";
+import {
+  ASSUMED_TOKEN_TTL_MS,
+  describeInstagramConnection,
+  validateInstagramToken,
+} from "../instagram/token";
 import { readDefaultLogo } from "../render/brand-logo";
 
 export type Settings = {
@@ -19,9 +26,15 @@ export type Settings = {
   hasLogo: boolean;
   publicBaseUrl: string;
   igUsername: string | null;
+  igStatus: string | null;
+  igWarning: string | null;
+  igNeedsToken: boolean;
 };
 
-export type SettingsInput = Omit<Settings, "igUsername" | "hasLogo">;
+export type SettingsInput = Omit<
+  Settings,
+  "igUsername" | "hasLogo" | "igStatus" | "igWarning" | "igNeedsToken"
+>;
 
 const settingsSchema = z.object({
   name: z.string(),
@@ -61,16 +74,33 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     has_logo: boolean;
     public_base_url: string;
     ig_username: string | null;
+    ig_access_token: string | null;
+    ig_checked_at: Date | string | null;
+    ig_expires_at: Date | string | null;
+    ig_token_error: string | null;
+    ig_refresh_error: string | null;
   }>(
     `select b.name, b.handle, b.initial, b.accent, b.kicker, b.work_start, b.work_end,
             b.pass_threshold, b.default_format, b.default_template, b.slide_count,
             (b.logo is not null) as has_logo, b.public_base_url,
-            ig.username as ig_username
+            ig.username as ig_username, ig.access_token as ig_access_token,
+            ig.checked_at as ig_checked_at, ig.expires_at as ig_expires_at,
+            ig.token_error as ig_token_error, ig.refresh_error as ig_refresh_error
      from brand b
      left join ig_connection ig on ig.id = 1
      where b.id = 1`,
   );
   const row = rows[0];
+  const checkedAt = asDate(row.ig_checked_at);
+  const expiresAt = asDate(row.ig_expires_at);
+  const ig = describeInstagramConnection({
+    username: row.ig_username,
+    hasToken: openAccessToken(row.ig_access_token) !== "",
+    checkedAt,
+    expiresAt,
+    tokenError: row.ig_token_error,
+    refreshError: row.ig_refresh_error,
+  });
   return {
     name: row.name,
     handle: row.handle,
@@ -84,9 +114,18 @@ export async function getSettings(sql: Sql): Promise<Settings> {
     defaultTemplate: row.default_template,
     slideCount: clampSlideCount(row.slide_count),
     hasLogo: Boolean(row.has_logo),
-    publicBaseUrl: row.public_base_url,
+    publicBaseUrl: resolvePublicBaseUrl(row.public_base_url),
     igUsername: row.ig_username,
+    igStatus: ig.status,
+    igWarning: ig.warning,
+    igNeedsToken: ig.needsToken,
   };
+}
+
+function asDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 export async function saveSettings(sql: Sql, role: Role, input: SettingsInput): Promise<void> {
@@ -159,7 +198,9 @@ export async function saveInstagramToken(
   if (!igUserId || !accessToken) {
     await sql.rows(
       `update ig_connection
-       set ig_user_id = null, access_token = null, username = null, connected_at = null
+       set ig_user_id = null, access_token = null, username = null, connected_at = null,
+           expires_at = null, checked_at = null, refreshed_at = null,
+           refresh_error = null, token_error = null
        where id = 1`,
     );
     return;
@@ -170,8 +211,25 @@ export async function saveInstagramToken(
   }
   await sql.rows(
     `update ig_connection
-     set ig_user_id = $1, access_token = $2, username = $3, connected_at = now()
+     set ig_user_id = $1, access_token = $2, username = $3, connected_at = now(),
+         checked_at = now(), expires_at = $4, refreshed_at = null,
+         refresh_error = null, token_error = null
      where id = 1`,
-    [igUserId, accessToken, username],
+    [igUserId, sealAccessToken(accessToken), username, new Date(Date.now() + ASSUMED_TOKEN_TTL_MS)],
   );
+}
+
+/** Validates the token with Instagram, then stores the id and username Instagram returns. */
+export async function connectInstagram(
+  sql: Sql,
+  role: Role,
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const profile = await validateInstagramToken(accessToken, fetchImpl);
+  await saveInstagramToken(sql, role, {
+    igUserId: profile.userId,
+    accessToken,
+    username: profile.username,
+  });
 }

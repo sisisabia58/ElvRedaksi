@@ -144,6 +144,11 @@ create table if not exists ig_connection (
   access_token text,
   username text,
   connected_at timestamptz,
+  expires_at timestamptz,
+  checked_at timestamptz,
+  refreshed_at timestamptz,
+  refresh_error text,
+  token_error text,
   constraint ig_one check (id = 1)
 );
 

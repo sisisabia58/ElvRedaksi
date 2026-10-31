@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
+import { isLocalPublicUrl } from "@/src/domain/public-url";
 import type { Settings, SettingsInput } from "@/src/studio/settings";
 import {
   changePasswordAction,
@@ -67,11 +68,7 @@ export function PengaturanForm({
     confirm: "",
   });
   const [brand, setBrand] = useState<SettingsInput>(() => brandFromSettings(settings));
-  const [igConnect, setIgConnect] = useState({
-    igUserId: "",
-    accessToken: "",
-    igUsername: "",
-  });
+  const [igToken, setIgToken] = useState("");
 
   function onBrandSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,14 +105,10 @@ export function PengaturanForm({
   function onIgConnectSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     startTransition(async () => {
-      const result = await saveInstagramConnectAction(
-        igConnect.igUserId,
-        igConnect.accessToken,
-        igConnect.igUsername,
-      );
+      const result = await saveInstagramConnectAction(igToken);
       if (result.ok) {
         setIgError(null);
-        setIgConnect({ igUserId: "", accessToken: "", igUsername: "" });
+        setIgToken("");
         router.refresh();
       } else {
         setIgError(result.error);
@@ -344,6 +337,11 @@ export function PengaturanForm({
             value={brand.publicBaseUrl}
             onChange={(value) => setBrand((b) => ({ ...b, publicBaseUrl: value }))}
           />
+          {isLocalPublicUrl(brand.publicBaseUrl) ? (
+            <p className="text-xs text-amber-100" role="status">
+              URL publik masih mengarah ke komputer ini. Instagram tidak bisa mengambil gambar dari alamat ini.
+            </p>
+          ) : null}
           {brandError ? (
             <p className="text-sm text-destructive" role="alert">
               {brandError}
@@ -430,14 +428,31 @@ export function PengaturanForm({
 
       <section className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Instagram</h2>
+        <p className="text-xs text-[var(--muted)]">
+          Butuh akun Instagram Business atau Creator. Tempel token long-lived dari Instagram Login
+          dengan izin instagram_business_basic, instagram_business_content_publish, dan
+          instagram_business_manage_insights. Token short-lived tidak bisa ditukar di sini.
+        </p>
         {igError ? (
           <p className="text-sm text-destructive" role="alert">
             {igError}
           </p>
         ) : null}
-        {settings.igUsername ? (
+        {settings.igStatus ? (
+          <p
+            className={`text-sm ${settings.igStatus.startsWith("Token") ? "text-amber-100" : ""}`}
+            role="status"
+          >
+            {settings.igStatus}
+          </p>
+        ) : null}
+        {settings.igWarning ? (
+          <p className="text-sm text-amber-100" role="status">
+            {settings.igWarning}
+          </p>
+        ) : null}
+        {settings.igUsername && !settings.igNeedsToken && !settings.igWarning && !settings.igStatus?.startsWith("Token") ? (
           <div className="space-y-3">
-            <p className="text-sm">Terhubung sebagai @{settings.igUsername}</p>
             <Button
               type="button"
               variant="outline"
@@ -460,33 +475,41 @@ export function PengaturanForm({
         ) : (
           <form className="space-y-3" onSubmit={onIgConnectSubmit}>
             <ControlledField
-              label="ID pengguna Instagram"
-              value={igConnect.igUserId}
-              autoComplete="off"
-              required
-              onChange={(value) => setIgConnect((c) => ({ ...c, igUserId: value }))}
-            />
-            <ControlledField
-              label="Nama pengguna Instagram"
-              value={igConnect.igUsername}
-              autoComplete="off"
-              required
-              onChange={(value) => setIgConnect((c) => ({ ...c, igUsername: value }))}
-            />
-            <ControlledField
-              label="Token akses"
+              label="Token akses long-lived"
               type="password"
-              value={igConnect.accessToken}
+              value={igToken}
               autoComplete="new-password"
               required
-              onChange={(value) => setIgConnect((c) => ({ ...c, accessToken: value }))}
+              onChange={setIgToken}
             />
             <p className="text-xs text-[var(--muted)]">
-              Token tidak ditampilkan lagi setelah disimpan. Posting memakai API resmi Meta.
+              Token tidak ditampilkan lagi setelah disimpan. Nama pengguna diisi dari Instagram.
             </p>
-            <Button type="submit" disabled={pending}>
-              Simpan koneksi
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" disabled={pending}>
+                Simpan koneksi
+              </Button>
+              {settings.igUsername ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => {
+                    startTransition(async () => {
+                      const result = await disconnectInstagramAction();
+                      if (!result.ok) {
+                        setIgError(result.error);
+                      } else {
+                        setIgError(null);
+                        router.refresh();
+                      }
+                    });
+                  }}
+                >
+                  Putuskan
+                </Button>
+              ) : null}
+            </div>
           </form>
         )}
       </section>
@@ -523,7 +546,7 @@ function ControlledField({
         autoComplete={autoComplete}
         required={required}
         onChange={(e) => onChange(e.target.value)}
-        className="border-[var(--line)] bg-[var(--panel)]"
+        className="bg-[var(--panel)]"
       />
     </div>
   );

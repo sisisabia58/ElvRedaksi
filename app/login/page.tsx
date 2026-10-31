@@ -44,7 +44,7 @@ export default async function LoginPage({
               type="email"
               required
               autoComplete="email"
-              className="bg-[var(--panel-2)] border-[var(--line)]"
+              className="bg-[var(--panel-2)]"
             />
           </div>
           <div className="space-y-2">
@@ -55,7 +55,7 @@ export default async function LoginPage({
               type="password"
               required
               autoComplete="current-password"
-              className="bg-[var(--panel-2)] border-[var(--line)]"
+              className="bg-[var(--panel-2)]"
             />
           </div>
           {showError ? (

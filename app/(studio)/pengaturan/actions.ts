@@ -8,7 +8,7 @@ import { getAppSql } from "@/src/auth/app-sql";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
 import { queueBeritaProRerender } from "@/src/studio/rerender-template";
 import type { SettingsInput } from "@/src/studio/settings";
-import { restoreDefaultLogo, saveBrandLogo, saveInstagramToken, saveSettings } from "@/src/studio/settings";
+import { connectInstagram, restoreDefaultLogo, saveBrandLogo, saveInstagramToken, saveSettings } from "@/src/studio/settings";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -86,18 +86,10 @@ export async function queueBeritaProRerenderAction(): Promise<ActionResult & { q
   }
 }
 
-export async function saveInstagramConnectAction(
-  igUserId: string,
-  accessToken: string,
-  username: string,
-): Promise<ActionResult> {
+export async function saveInstagramConnectAction(accessToken: string): Promise<ActionResult> {
   try {
     const { sql, user } = await requireAdmin();
-    await saveInstagramToken(sql, user.role, {
-      igUserId,
-      accessToken,
-      username,
-    });
+    await connectInstagram(sql, user.role, accessToken);
     revalidatePath("/pengaturan");
     return { ok: true };
   } catch (error) {
