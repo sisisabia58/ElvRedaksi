@@ -60,6 +60,10 @@ export type AnalyticsPost = {
 
 export type AnalyticsView = {
   empty: boolean;
+  connected: boolean;
+  syncError: string | null;
+  lastSyncedAt: Date | null;
+  viewsWindowNote: string | null;
   followers: MetricCard;
   views: MetricCard;
   reach: MetricCard;
@@ -193,6 +197,10 @@ function sumKey(points: DailyPoint[], key: "views" | "reach"): number {
 function emptyView(): AnalyticsView {
   return {
     empty: true,
+    connected: false,
+    syncError: null,
+    lastSyncedAt: null,
+    viewsWindowNote: null,
     followers: { value: null, delta: null, deltaKind: "absolute" },
     views: { value: null, delta: null, deltaKind: "percent" },
     reach: { value: null, delta: null, deltaKind: "percent" },
@@ -208,8 +216,11 @@ export function normalizeInsights(input: {
   daily: DailyPoint[];
   accountsEngaged: number | null;
   posts: InsightPostInput[];
+  /** Facebook `views` is a window total, not a daily series. */
+  viewsTotal?: number | null;
 }): { snapshot: NormalizedSnapshot; posts: InsightPostInput[] } {
-  const views = input.daily.reduce((total, point) => total + point.views, 0);
+  const summedViews = input.daily.reduce((total, point) => total + point.views, 0);
+  const views = input.viewsTotal != null ? input.viewsTotal : summedViews;
   const reach = input.daily.reduce((total, point) => total + point.reach, 0);
   const interactions = input.posts.reduce(
     (total, post) => total + post.likes + post.comments + post.saves + post.shares,
@@ -270,12 +281,44 @@ function sortPosts(posts: AnalyticsPost[], sort: AnalyticsSort): AnalyticsPost[]
   });
 }
 
+type ConnectionRow = {
+  ig_user_id: string | null;
+  access_token: string | null;
+  api_host: string | null;
+  insights_error: string | null;
+  insights_synced_at: Date | string | null;
+};
+
+async function insightConnection(sql: Sql): Promise<{
+  connected: boolean;
+  syncError: string | null;
+  lastSyncedAt: Date | null;
+  facebook: boolean;
+}> {
+  const rows = await sql.rows<ConnectionRow>(
+    `select ig_user_id, access_token, api_host, insights_error, insights_synced_at
+     from ig_connection where id = 1`,
+  );
+  const row = rows[0];
+  if (!row) {
+    return { connected: false, syncError: null, lastSyncedAt: null, facebook: false };
+  }
+  const synced = row.insights_synced_at;
+  return {
+    connected: Boolean(row.ig_user_id?.trim() && row.access_token?.trim()),
+    syncError: row.insights_error?.trim() ? row.insights_error.trim() : null,
+    lastSyncedAt: synced == null ? null : asDate(synced),
+    facebook: row.api_host === "facebook",
+  };
+}
+
 export async function analyticsView(
   sql: Sql,
   days: 7 | 28 | 90,
   now: Date,
   sort: AnalyticsSort = "terbaru",
 ): Promise<AnalyticsView> {
+  const link = await insightConnection(sql);
   const latest = await sql.rows<SnapshotRow>(
     `select id, taken_at, followers, views, reach, interactions, accounts_engaged, daily
      from insight_snapshots
@@ -283,7 +326,14 @@ export async function analyticsView(
      limit 1`,
   );
   const snapshot = latest[0];
-  if (!snapshot) return emptyView();
+  if (!snapshot) {
+    return {
+      ...emptyView(),
+      connected: link.connected,
+      syncError: link.syncError,
+      lastSyncedAt: link.lastSyncedAt,
+    };
+  }
 
   const { currentStart, currentEnd, previousStart, previousEnd } = windows(now, days);
   const daily = asDaily(snapshot.daily);
@@ -310,13 +360,22 @@ export async function analyticsView(
   const followers = asCount(snapshot.followers) ?? 0;
   const interactions = asCount(snapshot.interactions) ?? 0;
   const accountsEngaged = snapshot.accounts_engaged == null ? null : asCount(snapshot.accounts_engaged);
-  const viewsValue = sumKey(currentDaily, "views");
+  const windowViews = sumKey(currentDaily, "views");
+  const snapshotViews = asCount(snapshot.views) ?? 0;
+  const viewsFromWindow = link.facebook && windowViews === 0;
+  const viewsValue = viewsFromWindow ? snapshotViews : windowViews;
   const reachValue = sumKey(currentDaily, "reach");
 
   const posts = await loadPosts(sql);
 
   return {
     empty: false,
+    connected: link.connected,
+    syncError: link.syncError,
+    lastSyncedAt: link.lastSyncedAt,
+    viewsWindowNote: viewsFromWindow
+      ? "Total jendela sinkron (±29 hari), bukan jumlah harian."
+      : null,
     followers: {
       value: followers,
       delta:
@@ -325,7 +384,7 @@ export async function analyticsView(
     },
     views: {
       value: viewsValue,
-      delta: deltaPct(viewsValue, sumKey(previousDaily, "views")),
+      delta: viewsFromWindow ? null : deltaPct(viewsValue, sumKey(previousDaily, "views")),
       deltaKind: "percent",
     },
     reach: {

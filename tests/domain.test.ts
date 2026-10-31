@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertTransition, reviewActionVisible } from "../src/domain/status";
+import { assertTransition, draftStatusLabel, reviewActionVisible } from "../src/domain/status";
 import { greeting, isWithinWorkHours } from "../src/domain/time";
 import { totalScore, verdict } from "../src/domain/score";
 import { deltaPct, engagementRate, formatUsd } from "../src/domain/metrics";
@@ -39,6 +39,9 @@ describe("draft gate", () => {
     expect(reviewActionVisible("needs_review", "post_now")).toBe(true);
     expect(reviewActionVisible("rejected", "post_now")).toBe(false);
     expect(reviewActionVisible("posted", "approve")).toBe(false);
+    expect(draftStatusLabel("posting")).toBe("Sedang diposting");
+    expect(draftStatusLabel("posted")).toBe("Sudah diposting");
+    expect(draftStatusLabel("simulasi")).toBe("Simulasi");
   });
 
   it("requires the manual flag to skip the API", () => {

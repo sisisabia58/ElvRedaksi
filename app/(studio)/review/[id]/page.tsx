@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getAppSql } from "@/src/auth/app-sql";
 import { can } from "@/src/auth/rbac";
 import { SESSION_COOKIE, userForToken } from "@/src/auth/session";
+import { backfillDraftPermalink } from "@/src/instagram/permalink";
 import { livePublishBlock, practiceBanner, readPracticeMode, envForcesPractice } from "@/src/publish/mode";
 import { getDraft } from "@/src/studio/drafts";
 import { EditorPanel } from "./editor-panel";
@@ -24,6 +25,12 @@ export default async function ReviewEditorPage({ params }: PageParams) {
     notFound();
   }
 
+  const permalink = await backfillDraftPermalink(sql, {
+    id: draft.id,
+    status: draft.status,
+    igMediaId: draft.igMediaId,
+    permalink: draft.permalink,
+  });
   const practice = await readPracticeMode(sql);
   const igRows = await sql.rows<{ username: string | null }>(
     "select username from ig_connection where id = 1",
@@ -51,6 +58,9 @@ export default async function ReviewEditorPage({ params }: PageParams) {
         score: draft.score,
         sourceName: draft.sourceName,
         handle: draft.handle,
+        postedAt: draft.postedAt ? new Date(draft.postedAt).toISOString() : null,
+        permalink,
+        topicUrl: draft.topicUrl,
         slideCount: draft.slideCount,
         usePublicMedia,
         assetIds: draft.assetIds,

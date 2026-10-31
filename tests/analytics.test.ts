@@ -79,7 +79,9 @@ describe("analytics", () => {
     expect(posts).toHaveLength(0);
     const log = await sql.rows<{ message: string }>("select message from activity where agent = 'analitik'");
     expect(log).toHaveLength(1);
-    expect(log[0].message).toBe("Analitik gagal diambil dari Instagram");
+    expect(log[0].message).toBe("Analitik gagal diambil dari Instagram: Invalid OAuth");
+    expect(view.connected).toBe(true);
+    expect(view.syncError).toBe("Invalid OAuth");
     const jobs = await sql.rows<{ run_at: string | Date; finished_at: string | Date | null }>(
       "select run_at, finished_at from jobs where name = 'insights.sync' and finished_at is null",
     );
@@ -108,6 +110,10 @@ describe("analytics", () => {
     const log = await sql.rows<{ message: string }>("select message from activity where agent = 'analitik'");
     expect(log).toHaveLength(1);
     expect(log[0].message).toBe("Analitik gagal diambil dari Instagram");
+    const failed = await analyticsView(sql, 28, now);
+    expect(failed.connected).toBe(true);
+    expect(failed.empty).toBe(true);
+    expect(failed.syncError).toBe("Analitik gagal diambil dari Instagram");
     const jobs = await sql.rows<{ run_at: string | Date }>(
       "select run_at from jobs where name = 'insights.sync' and finished_at is null",
     );

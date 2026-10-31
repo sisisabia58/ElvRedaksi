@@ -12,6 +12,7 @@ import {
 } from "../domain/constants";
 import { publicUrlPublishError, resolvePublicBaseUrl } from "../domain/public-url";
 import { bearerInit, graphUrl, type GraphHost } from "../instagram/graph";
+import { fetchInstagramPermalink } from "../instagram/permalink";
 import { IG_REFRESH_INTERVAL_MS, TOKEN_RECONNECT, refreshStoredInstagramToken } from "../instagram/token";
 import { assertTransition, type DraftStatus } from "../domain/status";
 import { totalScore, verdict } from "../domain/score";
@@ -417,9 +418,11 @@ function slidesKeepingCoverPhoto(nextSlides: Slide[], stored: unknown): Slide[] 
   }
 }
 
-async function topicDraftIsPosting(sql: JobCtx["sql"], topicId: string): Promise<boolean> {
+async function topicDraftIsFrozen(sql: JobCtx["sql"], topicId: string): Promise<boolean> {
   const rows = await sql.rows<{ id: string }>(
-    `select id from drafts where topic_id = $1 and status = 'posting' limit 1`,
+    `select id from drafts
+     where topic_id = $1 and status in ('posting', 'posted', 'simulasi')
+     limit 1`,
     [topicId],
   );
   return rows.length > 0;
@@ -612,7 +615,7 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   }
 
   const rewrite = ctx.payload.rewrite === true;
-  if (rewrite && (await topicDraftIsPosting(ctx.sql, topicId))) {
+  if (rewrite && (await topicDraftIsFrozen(ctx.sql, topicId))) {
     return;
   }
   if (!rewrite) {
@@ -651,7 +654,7 @@ export async function runCopywriter(ctx: CopywriterCtx): Promise<void> {
   try {
     copy = parseCopy(result.text, topic.source_name);
   } catch (error) {
-    if (rewrite && (await topicDraftIsPosting(ctx.sql, topicId))) {
+    if (rewrite && (await topicDraftIsFrozen(ctx.sql, topicId))) {
       return;
     }
     const message = error instanceof Error ? error.message : "naskah tidak valid";
@@ -848,7 +851,7 @@ export async function runDesigner(ctx: DesignerCtx): Promise<void> {
   if (!draft) {
     throw new Error("draft tidak ditemukan");
   }
-  if (draft.status === "posting") {
+  if (draft.status === "posting" || draft.status === "posted" || draft.status === "simulasi") {
     return;
   }
 
@@ -986,7 +989,7 @@ function asSlides(raw: unknown): Slide[] {
   return [];
 }
 
-export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Promise<void> {
+export async function runPublisher(ctx: JobCtx & { publisher?: Publisher; fetchImpl?: typeof fetch }): Promise<void> {
   const draftId = ctx.payload.draftId;
   if (typeof draftId !== "string" || !draftId) {
     throw new Error("draft tidak ditemukan");
@@ -1049,11 +1052,24 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
   }
 
   if (draft.ig_media_id != null) {
-    await finishPostingDraft(ctx, draftId, {
+    const simulated = draft.ig_media_id.startsWith("fake_");
+    const permalink = await lookupPermalink(ctx, {
       mediaId: draft.ig_media_id,
-      storyMediaId: draft.story_media_id,
-      storyError: draft.story_error,
-    }, draft.ig_media_id.startsWith("fake_"));
+      accessToken: openAccessToken(draft.access_token),
+      host: graphHost(draft.api_host),
+      simulated,
+    });
+    await finishPostingDraft(
+      ctx,
+      draftId,
+      {
+        mediaId: draft.ig_media_id,
+        storyMediaId: draft.story_media_id,
+        storyError: draft.story_error,
+      },
+      simulated,
+      permalink,
+    );
     return;
   }
 
@@ -1150,12 +1166,22 @@ export async function runPublisher(ctx: JobCtx & { publisher?: Publisher }): Pro
     throw new Error("Status draf sudah berubah");
   }
   if (result.storyError === TOKEN_RECONNECT) await markTokenReconnect(ctx.sql);
-  await finishPostingDraft(
-    ctx,
-    draftId,
-    result,
-    practice || result.mediaId.startsWith("fake_"),
-  );
+  const simulated = practice || result.mediaId.startsWith("fake_");
+  const permalink = await lookupPermalink(ctx, {
+    mediaId: result.mediaId,
+    accessToken,
+    host: graphHost(draft.api_host),
+    simulated,
+  });
+  await finishPostingDraft(ctx, draftId, result, simulated, permalink);
+}
+
+async function lookupPermalink(
+  ctx: JobCtx & { fetchImpl?: typeof fetch },
+  input: { mediaId: string; accessToken: string; host: GraphHost; simulated: boolean },
+): Promise<string | null> {
+  if (input.simulated || !input.accessToken || input.mediaId.startsWith("fake_")) return null;
+  return fetchInstagramPermalink(ctx.fetchImpl ?? fetch, input.mediaId, input.accessToken, input.host);
 }
 
 async function finishPostingDraft(
@@ -1163,16 +1189,18 @@ async function finishPostingDraft(
   draftId: string,
   result: PublishResult,
   simulated: boolean,
+  permalink: string | null,
 ): Promise<void> {
   const next = simulated ? "simulasi" : "posted";
   assertTransition("worker", "posting", next);
   const posted = await ctx.sql.rows<{ id: string }>(
     `update drafts
      set status = $1, ig_media_id = $2, story_media_id = $3, story_error = $4,
-         posted_at = $5, updated_at = $5, error = null
+         posted_at = $5, updated_at = $5, error = null,
+         ig_permalink = coalesce($7, ig_permalink)
      where id = $6 and status = 'posting'
      returning id`,
-    [next, result.mediaId, result.storyMediaId, result.storyError, ctx.now, draftId],
+    [next, result.mediaId, result.storyMediaId, result.storyError, ctx.now, draftId, permalink],
   );
   if (posted.length === 0) {
     throw new Error("Status draf sudah berubah");
@@ -1230,12 +1258,43 @@ function readFollowers(body: unknown): number {
 function metricNumber(data: unknown[], name: string): number {
   for (const item of data) {
     if (!isRecord(item) || item.name !== name || isRecord(item.error)) continue;
-    if (!Array.isArray(item.values)) return 0;
-    const last = item.values[item.values.length - 1];
-    if (!isRecord(last) || typeof last.value !== "number" || !Number.isFinite(last.value)) return 0;
-    return last.value;
+    if (Array.isArray(item.values) && item.values.length > 0) {
+      const last = item.values[item.values.length - 1];
+      if (isRecord(last) && typeof last.value === "number" && Number.isFinite(last.value)) return last.value;
+    }
+    if (isRecord(item.total_value) && typeof item.total_value.value === "number" && Number.isFinite(item.total_value.value)) {
+      return item.total_value.value;
+    }
   }
   return 0;
+}
+
+function sanitizeGraphMessage(body: unknown, secret: string): string | null {
+  if (!isRecord(body) || !isRecord(body.error) || typeof body.error.message !== "string") return null;
+  let text = body.error.message;
+  if (secret) text = text.split(secret).join("");
+  text = text.replace(/bearer\s+\S+/gi, "").replace(/access_token=\S+/gi, "");
+  text = text.replace(/\s+/g, " ").trim().slice(0, 240);
+  return text || null;
+}
+
+function firstGraphDetail(bodies: unknown[], secret: string): string | null {
+  for (const body of bodies) {
+    const text = sanitizeGraphMessage(body, secret);
+    if (text) return text;
+  }
+  return null;
+}
+
+function readMetricTotal(body: unknown, name: string): number | null {
+  if (!isRecord(body) || !Array.isArray(body.data)) return null;
+  for (const item of body.data) {
+    if (!isRecord(item) || item.name !== name || isRecord(item.error)) continue;
+    if (isRecord(item.total_value) && typeof item.total_value.value === "number" && Number.isFinite(item.total_value.value)) {
+      return item.total_value.value;
+    }
+  }
+  return null;
 }
 
 function jakartaDate(instant: Date): string {
@@ -1349,11 +1408,18 @@ function readPosts(body: unknown): {
   return posts;
 }
 
-async function recordInsightsFailure(ctx: JobCtx): Promise<void> {
+async function recordInsightsFailure(ctx: JobCtx, detail?: string | null): Promise<void> {
+  const cleaned = detail?.trim() ? detail.trim().slice(0, 240) : null;
+  const message = cleaned
+    ? `Analitik gagal diambil dari Instagram: ${cleaned}`
+    : "Analitik gagal diambil dari Instagram";
   await ctx.sql.rows(`insert into activity (id, agent, message) values ($1, $2, $3)`, [
     randomUUID(),
     "analitik",
-    "Analitik gagal diambil dari Instagram",
+    message,
+  ]);
+  await ctx.sql.rows(`update ig_connection set insights_error = $1 where id = 1`, [
+    cleaned ?? "Analitik gagal diambil dari Instagram",
   ]);
   await enqueueNextInsights(ctx);
 }
@@ -1398,38 +1464,56 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
   }
 
   // Mode latihan may validate a token when it is saved. It must not pull insights.
-  if ((await readPracticeMode(ctx.sql)) || connection?.token_error === TOKEN_RECONNECT) {
+  if (await readPracticeMode(ctx.sql)) {
+    await enqueueNextInsights(ctx);
+    return;
+  }
+  if (connection?.token_error === TOKEN_RECONNECT) {
+    await ctx.sql.rows(`update ig_connection set insights_error = $1 where id = 1`, [TOKEN_RECONNECT]);
     await enqueueNextInsights(ctx);
     return;
   }
 
   const host = graphHost(connection?.api_host);
-  const since = Math.floor((ctx.now.getTime() - 90 * 24 * 60 * 60 * 1000) / 1000);
+  const spanDays = host === "facebook" ? 29 : 90;
+  const since = Math.floor((ctx.now.getTime() - spanDays * 24 * 60 * 60 * 1000) / 1000);
   const until = Math.floor(ctx.now.getTime() / 1000);
+  const mediaFields = "id,timestamp,like_count,comments_count,media_type,insights.metric(views,reach,saved,shares)";
   let followersBody: unknown;
   let insightsBody: unknown;
+  let viewsBody: unknown = null;
   let mediaBody: unknown;
   try {
-    [followersBody, insightsBody, mediaBody] = await Promise.all([
-      graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }, host),
-      graphGet(fetchImpl, `${igUserId}/insights`, token, {
-        metric: "views,reach",
-        period: "day",
-        since: String(since),
-        until: String(until),
-      }, host),
-      graphGet(fetchImpl, `${igUserId}/media`, token, {
-        fields: "id,timestamp,like_count,comments_count,media_type,insights.metric(views,reach,saved,shares)",
-        limit: "50",
-      }, host),
-    ]);
-    if (host === "facebook" && graphErrorCode(insightsBody) === 100) {
-      insightsBody = await graphGet(fetchImpl, `${igUserId}/insights`, token, {
-        metric: "impressions,reach",
-        period: "day",
-        since: String(since),
-        until: String(until),
-      }, host);
+    if (host === "facebook") {
+      [followersBody, insightsBody, viewsBody, mediaBody] = await Promise.all([
+        graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }, host),
+        graphGet(fetchImpl, `${igUserId}/insights`, token, {
+          metric: "reach",
+          period: "day",
+          metric_type: "time_series",
+          since: String(since),
+          until: String(until),
+        }, host),
+        graphGet(fetchImpl, `${igUserId}/insights`, token, {
+          metric: "views",
+          period: "day",
+          metric_type: "total_value",
+          since: String(since),
+          until: String(until),
+        }, host),
+        graphGet(fetchImpl, `${igUserId}/media`, token, { fields: mediaFields, limit: "50" }, host),
+      ]);
+    } else {
+      [followersBody, insightsBody, mediaBody] = await Promise.all([
+        graphGet(fetchImpl, igUserId, token, { fields: "followers_count" }, host),
+        graphGet(fetchImpl, `${igUserId}/insights`, token, {
+          metric: "views,reach",
+          period: "day",
+          since: String(since),
+          until: String(until),
+        }, host),
+        graphGet(fetchImpl, `${igUserId}/media`, token, { fields: mediaFields, limit: "50" }, host),
+      ]);
     }
     if (host === "facebook" && graphErrorCode(mediaBody) === 100) {
       mediaBody = await graphGet(fetchImpl, `${igUserId}/media`, token, {
@@ -1442,20 +1526,17 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
     return;
   }
 
-  if (
-    graphErrorCode(followersBody) === 190 ||
-    graphErrorCode(insightsBody) === 190 ||
-    graphErrorCode(mediaBody) === 190
-  ) {
+  const accountBodies = [followersBody, insightsBody, viewsBody];
+  if (accountBodies.some((body) => graphErrorCode(body) === 190) || graphErrorCode(mediaBody) === 190) {
     await markTokenReconnect(ctx.sql);
-    await recordInsightsFailure(ctx);
+    await recordInsightsFailure(ctx, firstGraphDetail([followersBody, insightsBody, viewsBody, mediaBody], token));
     return;
   }
 
   // A metric error inside insights `data` is still a zero. A top-level error
   // on followers or account insights is a failed sync, not a snapshot of zeros.
-  if (hasGraphError(followersBody) || hasGraphError(insightsBody)) {
-    await recordInsightsFailure(ctx);
+  if (accountBodies.some((body) => hasGraphError(body))) {
+    await recordInsightsFailure(ctx, firstGraphDetail(accountBodies, token));
     return;
   }
 
@@ -1465,6 +1546,7 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
     daily: readDaily(insightsBody, followers, jakartaDate(ctx.now), await measuredFollowers(ctx.sql)),
     accountsEngaged: null,
     posts: readPosts(mediaBody),
+    viewsTotal: host === "facebook" ? readMetricTotal(viewsBody, "views") : null,
   });
 
   await ctx.sql.tx(async (tx) => {
@@ -1510,6 +1592,10 @@ export async function runInsights(ctx: JobCtx & { fetchImpl?: typeof fetch }): P
     }
   });
 
+  await ctx.sql.rows(
+    `update ig_connection set insights_error = null, insights_synced_at = $1 where id = 1`,
+    [ctx.now],
+  );
   await enqueueNextInsights(ctx);
 }
 

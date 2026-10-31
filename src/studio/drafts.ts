@@ -65,6 +65,10 @@ export type DraftDetail = {
   sourceName: string;
   handle: string;
   scheduledAt: Date | null;
+  postedAt: Date | null;
+  permalink: string | null;
+  igMediaId: string | null;
+  topicUrl: string | null;
   error: string | null;
   assetIds: string[];
   slideCount: number;
@@ -87,6 +91,10 @@ type DraftRow = {
   text_dirty: boolean;
   manual: boolean;
   scheduled_at: Date | null;
+  posted_at: Date | null;
+  ig_permalink: string | null;
+  ig_media_id: string | null;
+  topic_url: string | null;
   error: string | null;
   score: number | null;
   sensitive: boolean;
@@ -170,6 +178,12 @@ export async function withLockedDraftEdit(
   if (locked.status === "posting") {
     if (mode === "human") {
       throw new Error("Draf sedang diposting");
+    }
+    return false;
+  }
+  if (locked.status === "posted" || locked.status === "simulasi") {
+    if (mode === "human") {
+      throw new Error("Postingan yang sudah terbit tidak diubah dari sini.");
     }
     return false;
   }
@@ -277,7 +291,8 @@ export async function getDraft(sql: Sql, id: string): Promise<DraftDetail | null
   const rows = await sql.rows<DraftRow & { updated_at: Date }>(
     `select d.id, d.topic_id, d.status, d.format, d.template, d.slides, d.caption, d.hashtags,
             d.alt_headlines, d.focal_y, d.short_code, d.click_count, d.text_dirty, d.manual,
-            d.scheduled_at, d.error, d.updated_at, t.score, t.sensitive, s.name as source_name, b.handle,
+            d.scheduled_at, d.posted_at, d.ig_permalink, d.ig_media_id, d.error, d.updated_at,
+            t.score, t.sensitive, t.url as topic_url, s.name as source_name, b.handle,
             b.slide_count
      from drafts d
      join topics t on t.id = d.topic_id
@@ -323,6 +338,10 @@ export async function getDraft(sql: Sql, id: string): Promise<DraftDetail | null
     sourceName: row.source_name,
     handle: row.handle,
     scheduledAt: row.scheduled_at,
+    postedAt: row.posted_at,
+    permalink: row.ig_permalink,
+    igMediaId: row.ig_media_id,
+    topicUrl: row.topic_url,
     error: row.error,
     assetIds: assetRows.map((a) => a.id),
     slideCount,

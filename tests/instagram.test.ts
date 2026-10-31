@@ -520,7 +520,7 @@ describe("instagram token", () => {
     expect(urls.every((url) => url.startsWith("https://graph.facebook.com/v26.0/"))).toBe(true);
   });
 
-  it("falls back when Facebook insights reject views and flags oauth 190", async () => {
+  it("reads Facebook reach as a daily series and views as a window total", async () => {
     process.env.META_PROVIDER = "meta";
     const sql = await createTestSql();
     await setPracticeMode(sql, "admin", false);
@@ -541,19 +541,28 @@ describe("instagram token", () => {
         expect(url.searchParams.has("access_token")).toBe(false);
         const metric = url.searchParams.get("metric");
         if (metric) metrics.push(metric);
-        if (metric === "views,reach") return json({ error: { message: "metric", code: 100 } }, 400);
-        if (metric === "impressions,reach") {
+        if (metric === "reach") {
+          expect(url.searchParams.get("metric_type")).toBe("time_series");
           return json({
-            data: [{ name: "impressions", period: "day", values: [{ value: 9, end_time: "2026-10-29T00:00:00+07:00" }] }],
+            data: [{ name: "reach", period: "day", values: [{ value: 4, end_time: "2026-10-29T00:00:00+07:00" }] }],
           });
+        }
+        if (metric === "views") {
+          expect(url.searchParams.get("metric_type")).toBe("total_value");
+          return json({ data: [{ name: "views", period: "day", total_value: { value: 9 } }] });
         }
         if (url.pathname.includes("/media")) return json({ data: [] });
         return json({ followers_count: 10, id: "1789" });
       },
     });
-    expect(metrics).toEqual(["views,reach", "impressions,reach"]);
-    const snapshots = await sql.rows<{ views: number }>("select views from insight_snapshots");
+    expect(metrics).toEqual(["reach", "views"]);
+    const snapshots = await sql.rows<{ views: number; reach: number }>("select views, reach from insight_snapshots");
     expect(snapshots[0].views).toBe(9);
+    expect(snapshots[0].reach).toBe(4);
+    const synced = await sql.rows<{ insights_error: string | null }>(
+      "select insights_error from ig_connection",
+    );
+    expect(synced[0].insights_error).toBeNull();
 
     await sql.rows("delete from insight_snapshots");
     await runInsights({
@@ -563,9 +572,13 @@ describe("instagram token", () => {
       now,
       fetchImpl: async () => json({ error: { message: "echo tok-suat", code: 190 } }, 400),
     });
-    const marked = await sql.rows<{ token_error: string }>("select token_error from ig_connection");
+    const marked = await sql.rows<{ token_error: string; insights_error: string | null }>(
+      "select token_error, insights_error from ig_connection",
+    );
     expect(marked[0].token_error).toBe(TOKEN_RECONNECT);
     expect(marked[0].token_error).not.toContain("tok-suat");
+    expect(marked[0].insights_error ?? "").not.toContain("tok-suat");
+    expect(marked[0].insights_error).toBe("echo");
   });
 
   it("does not refresh a non-expiring Facebook token", async () => {

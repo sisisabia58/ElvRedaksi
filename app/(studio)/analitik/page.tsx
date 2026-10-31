@@ -71,6 +71,17 @@ function formatWhen(value: Date): string {
   }).format(value);
 }
 
+function formatSync(value: Date): string {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: TIME_ZONE,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
 function formatDay(ymd: string): string {
   return formatWhen(new Date(`${ymd}T12:00:00+07:00`));
 }
@@ -139,15 +150,34 @@ export default async function AnalitikPage({
         </div>
       </div>
 
-      {view.empty ? (
+      {!view.connected ? (
         <p className="text-sm text-[var(--muted)]">
           Hubungkan Instagram di Pengaturan. Angka di sini hanya dari API resmi.
         </p>
+      ) : view.empty ? (
+        <div className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-4">
+          <p className="text-sm text-[var(--ink)]">{view.syncError ?? "Belum ada angka dari Instagram."}</p>
+          <p className="text-sm text-[var(--muted)]">
+            Sinkron terakhir berhasil: {view.lastSyncedAt ? `${formatSync(view.lastSyncedAt)} WIB` : "Belum pernah"}.
+          </p>
+        </div>
       ) : (
         <>
+          {view.syncError ? (
+            <div className="space-y-1 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-4">
+              <p className="text-sm text-amber-200">{view.syncError}</p>
+              <p className="text-sm text-[var(--muted)]">
+                Sinkron terakhir berhasil: {view.lastSyncedAt ? `${formatSync(view.lastSyncedAt)} WIB` : "Belum pernah"}.
+              </p>
+            </div>
+          ) : view.lastSyncedAt ? (
+            <p className="text-sm text-[var(--muted)]">
+              Sinkron terakhir berhasil: {formatSync(view.lastSyncedAt)} WIB.
+            </p>
+          ) : null}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <MetricTile label="Followers" card={view.followers} />
-            <MetricTile label="Views" card={view.views} />
+            <MetricTile label="Views" card={view.views} note={view.viewsWindowNote} />
             <MetricTile label="Reach" card={view.reach} />
             <MetricTile label="Interaksi" card={view.interactions} />
             <MetricTile label="Akun berinteraksi" card={view.accountsEngaged} />
@@ -238,7 +268,7 @@ function SortLink({
   );
 }
 
-function MetricTile({ label, card }: { label: string; card: MetricCard }) {
+function MetricTile({ label, card, note }: { label: string; card: MetricCard; note?: string | null }) {
   return (
     <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4 space-y-2">
       <p className="text-xs font-medium tracking-wide text-[var(--muted)]">{label}</p>
@@ -250,6 +280,7 @@ function MetricTile({ label, card }: { label: string; card: MetricCard }) {
           {formatDelta(card.delta, card.deltaKind)}
         </p>
       ) : null}
+      {note ? <p className="text-xs text-[var(--muted)]">{note}</p> : null}
     </div>
   );
 }

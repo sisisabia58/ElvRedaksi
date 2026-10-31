@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import type { Slide } from "@/src/agents/copywriter";
-import type { DraftStatus } from "@/src/domain/status";
-import { reviewActionVisible } from "@/src/domain/status";
+import { draftStatusLabel, reviewActionVisible, type DraftStatus } from "@/src/domain/status";
+import { slidesForFormat } from "@/src/render/pick";
 import { coverUploadRejectionMessage, omitRejectedCoverPhoto } from "@/src/studio/cover-photo";
 import {
   adoptServerDraft,
@@ -57,6 +57,9 @@ type DraftView = {
   score: number | null;
   sourceName: string;
   handle: string;
+  postedAt: string | null;
+  permalink: string | null;
+  topicUrl: string | null;
   slideCount: number;
   usePublicMedia: boolean;
   assetIds: string[];
@@ -71,10 +74,54 @@ const TEMPLATES: { value: DraftView["template"]; label: string }[] = [
   { value: "catatan", label: "Catatan" },
 ];
 
-const FORMATS: { value: DraftView["format"]; label: string }[] = [
-  { value: "carousel_full", label: "Carousel penuh" },
-  { value: "teaser_bio", label: "Teaser + link bio" },
+const FORMATS: { value: DraftView["format"]; label: string; detail: string }[] = [
+  { value: "carousel_full", label: "Carousel penuh", detail: "Cover + semua slide isi" },
+  { value: "teaser_bio", label: "Teaser + link bio", detail: 'Cover + slide "baca di link bio"' },
 ];
+
+function slideRoleLabel(role: string): string {
+  if (role === "cover") return "Cover";
+  if (role === "cta") return "Ajakan";
+  return "Poin";
+}
+
+function formatPostedAt(iso: string): string {
+  const formatted = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(iso));
+  return `${formatted} WIB`;
+}
+
+function sourceHref(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function FieldLabel({ children }: { children: string }) {
+  return (
+    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{children}</p>
+  );
+}
+
+function StudioCard({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-4">
+      <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{title}</h2>
+      {children}
+    </section>
+  );
+}
 
 function previewSlideSrc(draft: DraftView, index: number): string {
   if (draft.usePublicMedia && draft.assetIds[index]) {
@@ -189,6 +236,14 @@ export function EditorPanel({
     clampedIndex,
     slideOptions,
   ]);
+
+  const previewSlides = useMemo(() => {
+    try {
+      return slidesForFormat(format, savePayload.slides, slideOptions);
+    } catch {
+      return savePayload.slides;
+    }
+  }, [format, savePayload.slides, slideOptions]);
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>, redirect?: string) {
     setError(null);
@@ -310,6 +365,10 @@ export function EditorPanel({
   }
 
   const posting = draft.status === "posting";
+  const frozen = posting || draft.status === "posted" || draft.status === "simulasi";
+  const published = draft.status === "posted" || draft.status === "simulasi";
+  const href = sourceHref(draft.topicUrl);
+  const fieldsLocked = frozen || !canWrite;
   const showApprove = canPublish && reviewActionVisible(draft.status, "approve");
   const showSchedule = canPublish && reviewActionVisible(draft.status, "schedule");
   const showReject = canWrite && reviewActionVisible(draft.status, "reject");
@@ -336,8 +395,24 @@ export function EditorPanel({
     awaitingRewrite: awaitsRewrite,
   });
 
+  function downloadAll() {
+    for (let i = 0; i < slideTotal; i++) {
+      const a = document.createElement("a");
+      a.href = downloadSlideSrc(draft, i);
+      a.download = `slide-${i + 1}.png`;
+      a.click();
+    }
+  }
+
+  function downloadOne(index: number) {
+    const a = document.createElement("a");
+    a.href = downloadSlideSrc(draft, index);
+    a.download = `slide-${index + 1}.png`;
+    a.click();
+  }
+
   return (
-    <div className="p-6 md:p-8 space-y-6">
+    <div className="space-y-6 p-6 pb-28 md:p-8">
       <Link href="/review" className="text-sm text-[var(--muted)] hover:text-[var(--ink)]">
         ← Antrian review
       </Link>
@@ -368,9 +443,32 @@ export function EditorPanel({
             </Button>
           </div>
 
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={downloadAll}>
+              Download semua ({slideTotal})
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => downloadOne(clampedIndex)}>
+              Slide {clampedIndex + 1}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={copyCaption}>
+              {copyLabel}
+            </Button>
+            {canWrite && !frozen ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={() => run(() => renderAgainAction(draft.id))}
+              >
+                Render ulang
+              </Button>
+            ) : null}
+          </div>
+
           {previewTab === "render" ? (
             <div className="space-y-3">
-              <div className="aspect-[4/5] bg-[var(--panel-2)] rounded-lg overflow-hidden border border-[var(--line)]">
+              <div className="aspect-[4/5] max-h-[58vh] w-full overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel-2)]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={previewSlideSrc(draft, clampedIndex)} alt="" className="size-full object-cover" />
               </div>
@@ -407,7 +505,7 @@ export function EditorPanel({
                   min={0}
                   max={100}
                   value={focalY}
-                  disabled={!canWrite || pending || posting}
+                  disabled={fieldsLocked || pending}
                   className="mt-2 w-full"
                   onChange={(e) => setFocalY(Number(e.target.value))}
                   onPointerDown={(e) => {
@@ -418,7 +516,7 @@ export function EditorPanel({
                   onBlur={(e) => commitFocalFromInput(e.currentTarget)}
                 />
               </label>
-              {canWrite && !posting ? (
+              {canWrite && !frozen ? (
                 <label className="block text-sm">
                   Ganti gambar
                   <Input
@@ -437,26 +535,64 @@ export function EditorPanel({
               ) : null}
             </div>
           )}
+
+          {previewTab === "render" ? (
+            <div className="flex gap-2 overflow-x-auto">
+              {Array.from({ length: slideTotal }, (_, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => showPreview(index)}
+                  className={`w-14 shrink-0 overflow-hidden rounded-md border ${
+                    index === clampedIndex ? "border-[var(--accent)]" : "border-[var(--line)]"
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={previewSlideSrc(draft, index)} alt="" className="aspect-[4/5] w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-4">
-          <div className="text-sm space-y-1">
-            <p className={blockPublish ? "text-amber-100" : "text-[var(--muted)]"}>{modeBanner}</p>
-            {draft.status === "simulasi" ? (
-              <p className="text-[var(--muted)]">Simulasi. Tidak terkirim ke Instagram.</p>
+          <StudioCard title={`STATUS: ${draftStatusLabel(draft.status).toUpperCase()}`}>
+            <p className={blockPublish ? "text-sm text-amber-100" : "text-sm text-[var(--muted)]"}>{modeBanner}</p>
+            {published ? (
+              <div className="space-y-1 rounded-lg border border-[var(--accent)] px-3 py-2">
+                <p className="text-sm font-semibold text-[var(--accent)]">{draftStatusLabel(draft.status)}</p>
+                {draft.status === "simulasi" ? (
+                  <p className="text-sm text-[var(--muted)]">Simulasi. Tidak terkirim ke Instagram.</p>
+                ) : null}
+                {draft.postedAt ? <p className="text-sm text-[var(--ink)]">{formatPostedAt(draft.postedAt)}</p> : null}
+                {draft.status === "posted" && draft.permalink ? (
+                  <a
+                    href={draft.permalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-[var(--ink)] underline"
+                  >
+                    Buka di Instagram
+                  </a>
+                ) : null}
+                <p className="text-sm text-[var(--ink)]">/s/{draft.shortCode}</p>
+              </div>
             ) : null}
-            <p>
-              Status: <span className="font-mono">{draft.status}</span>
+            <p className="text-sm text-[var(--ink)]">
+              {href ? (
+                <a href={href} target="_blank" rel="noreferrer" className="underline">
+                  {draft.sourceName}
+                </a>
+              ) : (
+                draft.sourceName
+              )}
+              {" · "}
+              {draft.clickCount} klik
               {draft.score != null ? (
                 <span className="ml-2 text-[var(--accent)]">Skor {draft.score}</span>
               ) : null}
             </p>
-            <p>
-              /s/{draft.shortCode} · {draft.clickCount} klik
-            </p>
-          </div>
-
-          {posting ? <p className="text-sm text-amber-200">Draf sedang diposting</p> : null}
+            {posting ? <p className="text-sm text-amber-200">Draf sedang diposting</p> : null}
 
           {awaitsRewrite ? (
             <p className="text-sm text-amber-200">Menunggu tulis ulang. Jangan setujui naskah demo.</p>
@@ -480,44 +616,11 @@ export function EditorPanel({
               <Button
                 type="button"
                 size="sm"
-                variant="secondary"
+                variant="outline"
                 disabled={pending || publishBlocked}
                 onClick={() => run(() => approveDraftAction(draft.id))}
               >
                 Setujui
-              </Button>
-            ) : null}
-            {showManual ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={pending || publishBlocked}
-                onClick={() => run(() => markPostedManuallyAction(draft.id))}
-              >
-                Sudah diposting manual
-              </Button>
-            ) : null}
-            {showReject ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                disabled={pending}
-                onClick={() => run(() => rejectDraftAction(draft.id))}
-              >
-                Tolak
-              </Button>
-            ) : null}
-            {showDelete ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                disabled={pending}
-                onClick={() => run(() => deleteDraftAction(draft.id), "/review")}
-              >
-                Hapus
               </Button>
             ) : null}
             {showRetry ? (
@@ -535,214 +638,246 @@ export function EditorPanel({
 
           {showSchedule ? (
             <div className="space-y-2">
-              <p className="text-xs font-medium tracking-wide text-[var(--muted)] uppercase">
-                JADWAL POSTING (WIB)
-              </p>
+              <FieldLabel>Jadwal posting (WIB)</FieldLabel>
               <Input
                 type="datetime-local"
                 value={scheduleAt}
                 onChange={(e) => setScheduleAt(e.target.value)}
-                className="border-[var(--line)] bg-[var(--panel-2)]"
+                className="border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
               />
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 disabled={pending || publishBlocked || blockPublish || !scheduleAt}
-                onClick={() =>
-                  run(() => scheduleDraftAction(draft.id, `${scheduleAt}+07:00`))
-                }
+                onClick={() => run(() => scheduleDraftAction(draft.id, `${scheduleAt}+07:00`))}
               >
                 Jadwalkan
               </Button>
             </div>
           ) : null}
 
-          <div className="space-y-2">
-            <p className="text-xs text-[var(--muted)] uppercase tracking-wide">Template</p>
+          {showManual || showReject || showDelete ? (
             <div className="flex flex-wrap gap-2">
-              {TEMPLATES.map((opt) => (
+              {showManual ? (
                 <Button
-                  key={opt.value}
                   type="button"
                   size="sm"
-                  variant={template === opt.value ? "default" : "outline"}
-                  disabled={!canWrite || pending || posting}
-                  onClick={() => {
-                    setTemplate(opt.value);
-                    run(() => setTemplateAction(draft.id, opt.value));
-                  }}
+                  variant="outline"
+                  disabled={pending || publishBlocked}
+                  onClick={() => run(() => markPostedManuallyAction(draft.id))}
                 >
-                  {opt.label}
+                  Sudah diposting manual
                 </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-xs text-[var(--muted)] uppercase tracking-wide">Format</p>
-            <div className="flex flex-wrap gap-2">
-              {FORMATS.map((opt) => (
+              ) : null}
+              {showReject ? (
                 <Button
-                  key={opt.value}
                   type="button"
                   size="sm"
-                  variant={format === opt.value ? "default" : "outline"}
-                  disabled={!canWrite || pending || posting}
-                  onClick={() => {
-                    if (opt.value !== format) {
-                      const nextPreview = switchPreviewFormat({
-                        slides,
-                        fromFormat: format,
-                        toFormat: opt.value,
-                        previewIndex: clampedIndex,
-                        kicker,
-                        headline,
-                        body,
-                      });
-                      setSlides(nextPreview.slides);
-                      setKicker(nextPreview.kicker);
-                      setHeadline(nextPreview.headline);
-                      setBody(nextPreview.body);
-                      setSlideIndex(nextPreview.index);
-                    }
-                    setFormat(opt.value);
-                    run(() => setFormatAction(draft.id, opt.value));
-                  }}
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={() => run(() => rejectDraftAction(draft.id))}
                 >
-                  {opt.label}
+                  Tolak
                 </Button>
-              ))}
-            </div>
-            {format === "teaser_bio" ? (
-              <p className="text-xs text-[var(--muted)]">
-                Slide isi di bawah tetap disimpan, tapi yang diposting cuma cover + slide baca di link bio.
-              </p>
-            ) : null}
-          </div>
-
-          {canWrite ? (
-            <div className="space-y-3">
-              <Input
-                value={kicker}
-                onChange={(e) => setKicker(e.target.value)}
-                placeholder="Kicker"
-                disabled={posting}
-                className="border-[var(--line)]"
-              />
-              <Input
-                value={headline}
-                onChange={(e) => setHeadline(e.target.value)}
-                placeholder="Headline"
-                disabled={posting}
-                className="border-[var(--line)]"
-              />
-              <Textarea
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder="Isi cover"
-                disabled={posting}
-                className="border-[var(--line)] min-h-[80px]"
-              />
-              <Textarea
-                value={caption}
-                onChange={(e) => setCaption(e.target.value)}
-                placeholder="Caption"
-                disabled={posting}
-                className="border-[var(--line)] min-h-[80px]"
-              />
-              <Input
-                value={hashtagsText}
-                onChange={(e) => setHashtagsText(e.target.value)}
-                placeholder="hashtag1, hashtag2"
-                disabled={posting}
-                className="border-[var(--line)]"
-              />
-              <div className="flex flex-wrap gap-2">
-                {altHeadlines.map((alt, i) => (
-                  <Button
-                    key={i}
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={posting}
-                    onClick={() => setHeadline(alt)}
-                  >
-                    {alt}
-                  </Button>
-                ))}
-              </div>
-              {posting ? null : (
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => run(() => saveAndRenderAction(draft.id, savePayload))}
-                  >
-                    Simpan & render ulang
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={pending}
-                    onClick={() => run(() => saveDraftTextAction(draft.id, savePayload))}
-                  >
-                    Simpan teks saja
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() => run(() => rewriteCopyAction(draft.topicId))}
-                  >
-                    Tulis ulang
-                  </Button>
-                </div>
-              )}
+              ) : null}
+              {showDelete ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={() => run(() => deleteDraftAction(draft.id), "/review")}
+                >
+                  Hapus
+                </Button>
+              ) : null}
             </div>
           ) : null}
+          </StudioCard>
 
-          <div className="flex flex-wrap gap-2 pt-4 border-t border-[var(--line)]">
-            <Button type="button" variant="outline" size="sm" onClick={copyCaption}>
-              {copyLabel}
-            </Button>
-            {canWrite && !posting ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={pending}
-                onClick={() => run(() => renderAgainAction(draft.id))}
-              >
-                Render ulang
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                for (let i = 0; i < slideTotal; i++) {
-                  const a = document.createElement("a");
-                  a.href = downloadSlideSrc(draft, i);
-                  a.download = `slide-${i + 1}.png`;
-                  a.click();
-                }
-              }}
-            >
-              Download semua
-            </Button>
-            {Array.from({ length: slideTotal }, (_, i) => (
-              <a
-                key={i}
-                href={downloadSlideSrc(draft, i)}
-                download={`slide-${i + 1}.png`}
-                className="text-xs underline text-[var(--muted)] hover:text-[var(--ink)]"
-              >
-                Unduh {i + 1}
-              </a>
-            ))}
-          </div>
+          {previewSlides.map((slide, index) => {
+            const active = index === clampedIndex;
+            return (
+              <StudioCard key={`${slide.role}-${index}`} title={`Slide ${index + 1} · ${slideRoleLabel(slide.role)}`}>
+                {slide.role === "cover" ? (
+                  <>
+                    <FieldLabel>Template</FieldLabel>
+                    <div className="flex flex-wrap gap-2">
+                      {TEMPLATES.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          disabled={fieldsLocked || pending}
+                          className={`rounded-lg border px-3 py-1.5 text-sm disabled:opacity-100 ${
+                            template === opt.value
+                              ? "border-[var(--accent)] text-[var(--accent)]"
+                              : "border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                          }`}
+                          onClick={() => {
+                            if (fieldsLocked) return;
+                            setTemplate(opt.value);
+                            run(() => setTemplateAction(draft.id, opt.value));
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <FieldLabel>Format post</FieldLabel>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {FORMATS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          disabled={fieldsLocked || pending}
+                          className={`rounded-xl border p-3 text-left disabled:opacity-100 ${
+                            format === opt.value
+                              ? "border-[var(--accent)] text-[var(--ink)]"
+                              : "border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                          }`}
+                          onClick={() => {
+                            if (fieldsLocked) return;
+                            if (opt.value !== format) {
+                              const nextPreview = switchPreviewFormat({
+                                slides,
+                                fromFormat: format,
+                                toFormat: opt.value,
+                                previewIndex: clampedIndex,
+                                kicker,
+                                headline,
+                                body,
+                              });
+                              setSlides(nextPreview.slides);
+                              setKicker(nextPreview.kicker);
+                              setHeadline(nextPreview.headline);
+                              setBody(nextPreview.body);
+                              setSlideIndex(nextPreview.index);
+                            }
+                            setFormat(opt.value);
+                            run(() => setFormatAction(draft.id, opt.value));
+                          }}
+                        >
+                          <span className="block text-sm font-medium">{opt.label}</span>
+                          <span className="mt-1 block text-xs text-[var(--muted)]">{opt.detail}</span>
+                        </button>
+                      ))}
+                    </div>
+                    {format === "teaser_bio" ? (
+                      <p className="text-xs text-[var(--muted)]">
+                        Slide isi di bawah tetap disimpan, tapi yang diposting cuma cover + slide baca di link bio.
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+                {active ? (
+                  <>
+                    <FieldLabel>Kicker</FieldLabel>
+                    <Input
+                      value={kicker}
+                      onChange={(e) => setKicker(e.target.value)}
+                      disabled={fieldsLocked}
+                      className="border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                    />
+                    <FieldLabel>Headline di gambar</FieldLabel>
+                    <Textarea
+                      value={headline}
+                      onChange={(e) => setHeadline(e.target.value)}
+                      disabled={fieldsLocked}
+                      className="min-h-[80px] border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                    />
+                    {slide.role === "cover" ? (
+                      <div className="space-y-2">
+                        <FieldLabel>Alternatif</FieldLabel>
+                        <div className="flex flex-wrap gap-2">
+                          {altHeadlines.map((alt, altIndex) => (
+                            <Button
+                              key={altIndex}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={fieldsLocked}
+                              onClick={() => setHeadline(alt)}
+                            >
+                              {alt}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <FieldLabel>Isi</FieldLabel>
+                    <Textarea
+                      value={body}
+                      onChange={(e) => setBody(e.target.value)}
+                      disabled={fieldsLocked}
+                      className="min-h-[80px] border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                    />
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-sm text-[var(--ink)]">{slide.kicker}</p>
+                    <p className="text-sm font-medium text-[var(--ink)]">{slide.headline}</p>
+                    <p className="text-sm text-[var(--muted)]">{slide.body}</p>
+                    {!fieldsLocked ? (
+                      <Button type="button" size="sm" variant="outline" onClick={() => showPreview(index)}>
+                        Ubah slide ini
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
+              </StudioCard>
+            );
+          })}
+
+          <StudioCard title="Caption">
+            <FieldLabel>Caption</FieldLabel>
+            <Textarea
+              value={caption}
+              onChange={(e) => setCaption(e.target.value)}
+              disabled={fieldsLocked}
+              className="min-h-[80px] border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+            />
+          </StudioCard>
+
+          <StudioCard title="Hashtag">
+            <FieldLabel>Hashtag</FieldLabel>
+            <Input
+              value={hashtagsText}
+              onChange={(e) => setHashtagsText(e.target.value)}
+              disabled={fieldsLocked}
+              className="border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+            />
+          </StudioCard>
+
+          {canWrite && !frozen ? (
+            <div className="fixed bottom-0 right-0 left-0 z-20 border-t border-[var(--line)] bg-[var(--bg)] px-4 py-3 md:left-[240px]">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => run(() => saveAndRenderAction(draft.id, savePayload))}
+                >
+                  Simpan & render ulang
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => run(() => saveDraftTextAction(draft.id, savePayload))}
+                >
+                  Simpan teks saja
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => run(() => rewriteCopyAction(draft.topicId))}
+                >
+                  Tulis ulang
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

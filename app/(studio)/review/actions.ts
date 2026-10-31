@@ -87,6 +87,9 @@ async function refusePostingDraft(
   if (draft?.status === "posting") {
     throw new Error("Draf sedang diposting");
   }
+  if (draft?.status === "posted" || draft?.status === "simulasi") {
+    throw new Error("Postingan yang sudah terbit tidak diubah dari sini.");
+  }
 }
 
 export async function approveDraftAction(id: string): Promise<ActionResult> {
@@ -293,6 +296,18 @@ export async function rewriteCopyAction(topicId: string): Promise<ActionResult> 
     const { sql, role } = await sessionUser();
     if (!can(role, "review.write")) {
       throw new Error("forbidden");
+    }
+    const frozen = await sql.rows<{ status: string }>(
+      `select status from drafts
+       where topic_id = $1 and status in ('posting', 'posted', 'simulasi')
+       limit 1`,
+      [topicId],
+    );
+    if (frozen[0]?.status === "posting") {
+      throw new Error("Draf sedang diposting");
+    }
+    if (frozen[0]) {
+      throw new Error("Postingan yang sudah terbit tidak diubah dari sini.");
     }
     await enqueue(sql, {
       name: "copywriter.write",

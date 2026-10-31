@@ -483,6 +483,21 @@ describe("review", () => {
     expect(jobs).toHaveLength(1);
   });
 
+  it("rejects a text save after the draft is posted", async () => {
+    const sql = await createTestSql();
+    await seedDraft(sql, false);
+    await sql.rows(`update drafts set status = 'posted' where id = $1`, [DRAFT_ID]);
+    await expect(
+      saveDraftText(sql, "social_media", DRAFT_ID, {
+        slides: [{ role: "cover", kicker: "AI", headline: "Judul baru yang cukup", body: "Isi." }],
+        caption: "Dari Contoh.",
+        hashtags: ["iklan"],
+        altHeadlines: ["Alt satu cukup", "Alt dua cukup"],
+        kicker: "AI",
+      }),
+    ).rejects.toThrow("Postingan yang sudah terbit tidak diubah dari sini.");
+  });
+
   it("does not cancel the publisher when a locked text save matches no row", async () => {
     const statements: string[] = [];
     const slides = [{ role: "cover" as const, kicker: "AI", headline: "Judul cukup panjang", body: "Isi." }];

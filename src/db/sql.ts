@@ -93,6 +93,7 @@ create table if not exists drafts (
   scheduled_at timestamptz,
   posted_at timestamptz,
   ig_media_id text,
+  ig_permalink text,
   story_media_id text,
   story_error text,
   error text,
@@ -151,6 +152,8 @@ create table if not exists ig_connection (
   refresh_error text,
   token_error text,
   api_host text,
+  insights_error text,
+  insights_synced_at timestamptz,
   constraint ig_one check (id = 1)
 );
 

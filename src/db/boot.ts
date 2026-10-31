@@ -258,6 +258,9 @@ const SCHEMA_EXTRAS = [
   "alter table ig_connection add column if not exists token_error text",
   "alter table ig_connection add column if not exists api_host text",
   "alter table brand add column if not exists practice_mode boolean not null default true",
+  "alter table drafts add column if not exists ig_permalink text",
+  "alter table ig_connection add column if not exists insights_error text",
+  "alter table ig_connection add column if not exists insights_synced_at timestamptz",
 ];
 
 export async function ensureSchemaExtras(sql: Sql): Promise<void> {

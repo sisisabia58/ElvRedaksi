@@ -10,6 +10,22 @@ export const DRAFT_STATUSES = [
   "rejected",
 ] as const;
 export type DraftStatus = (typeof DRAFT_STATUSES)[number];
+
+const STATUS_LABELS: Record<DraftStatus, string> = {
+  drafted: "Draf",
+  needs_review: "Perlu review",
+  approved: "Disetujui",
+  scheduled: "Terjadwal",
+  posting: "Sedang diposting",
+  posted: "Sudah diposting",
+  simulasi: "Simulasi",
+  failed: "Gagal posting",
+  rejected: "Ditolak",
+};
+
+export function draftStatusLabel(status: DraftStatus): string {
+  return STATUS_LABELS[status];
+}
 export type ActorKind = "human" | "worker";
 
 const EDGES: Record<DraftStatus, DraftStatus[]> = {
