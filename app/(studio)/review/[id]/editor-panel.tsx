@@ -117,7 +117,7 @@ function sourceHref(url: string | null): string | null {
 
 function FieldLabel({ children }: { children: string }) {
   return (
-    <p data-review-label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+    <p data-review-label className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
       {children}
     </p>
   );
@@ -125,8 +125,8 @@ function FieldLabel({ children }: { children: string }) {
 
 function StudioCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section data-studio-card className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-4">
-      <h2 data-review-label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+    <section data-studio-card className="space-y-3 rounded-xl border border-[var(--rule)] bg-[var(--panel-2)] p-4">
+      <h2 data-review-label className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
         {title}
       </h2>
       {children}
@@ -423,7 +423,7 @@ export function EditorPanel({
   }
 
   return (
-    <div className="space-y-6 p-6 pb-28 md:p-8">
+    <div className="space-y-6 p-6 md:p-8">
       <Link href="/review" className="text-sm text-[var(--muted)] hover:text-[var(--ink)]">
         ← Antrian review
       </Link>
@@ -434,7 +434,7 @@ export function EditorPanel({
       ) : null}
 
       <div className="grid gap-8 lg:grid-cols-2">
-        <div className="space-y-4">
+        <div data-preview-column className="space-y-4">
           <div className="flex gap-2">
             <Button
               type="button"
@@ -452,29 +452,6 @@ export function EditorPanel({
             >
               Atur posisi foto
             </Button>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={downloadAll}>
-              Download semua ({slideTotal})
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => downloadOne(clampedIndex)}>
-              Slide {clampedIndex + 1}
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={copyCaption}>
-              {copyLabel}
-            </Button>
-            {canWrite && !frozen ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={pending}
-                onClick={() => run(() => renderAgainAction(draft.id))}
-              >
-                Render ulang
-              </Button>
-            ) : null}
           </div>
 
           {previewTab === "render" ? (
@@ -549,27 +526,9 @@ export function EditorPanel({
               ) : null}
             </div>
           )}
-
-          {previewTab === "render" ? (
-            <div className="flex gap-2 overflow-x-auto">
-              {Array.from({ length: slideTotal }, (_, index) => (
-                <button
-                  key={index}
-                  type="button"
-                  onClick={() => showPreview(index)}
-                  className={`w-14 shrink-0 overflow-hidden rounded-md border ${
-                    index === clampedIndex ? "border-[var(--accent)]" : "border-[var(--line)]"
-                  }`}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={previewSlideSrc(draft, index)} alt="" className="aspect-[4/5] w-full object-cover" />
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
 
-        <div className="space-y-4">
+        <div className={`space-y-4 ${canWrite && !frozen ? "pb-24" : ""}`}>
           <StudioCard title={`STATUS: ${draftStatusLabel(draft.status).toUpperCase()}`}>
             <p className={blockPublish ? "text-sm text-amber-100" : "text-sm text-[var(--muted)]"}>{modeBanner}</p>
             {published ? (
@@ -657,7 +616,7 @@ export function EditorPanel({
                 type="datetime-local"
                 value={scheduleAt}
                 onChange={(e) => setScheduleAt(e.target.value)}
-                className="border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                className="border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
               />
               <Button
                 type="button"
@@ -736,7 +695,7 @@ export function EditorPanel({
                           className={`rounded-lg border px-3 py-1.5 text-sm disabled:opacity-100 ${
                             template === opt.value
                               ? "border-[var(--accent)] text-[var(--accent)]"
-                              : "border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                              : "border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
                           }`}
                           onClick={() => {
                             if (fieldsLocked) return;
@@ -758,7 +717,7 @@ export function EditorPanel({
                           className={`rounded-xl border p-3 text-left disabled:opacity-100 ${
                             format === opt.value
                               ? "border-[var(--accent)] text-[var(--ink)]"
-                              : "border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                              : "border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
                           }`}
                           onClick={() => {
                             if (fieldsLocked) return;
@@ -783,7 +742,7 @@ export function EditorPanel({
                           }}
                         >
                           <span className="block text-sm font-medium">{opt.label}</span>
-                          <span data-format-detail className="mt-1 block text-xs text-[var(--muted)]">
+                          <span data-format-detail className="mt-1 block text-[13px] text-[var(--muted)]">
                             {opt.detail}
                           </span>
                         </button>
@@ -803,14 +762,14 @@ export function EditorPanel({
                       value={kicker}
                       onChange={(e) => setKicker(e.target.value)}
                       disabled={fieldsLocked}
-                      className="border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                      className="border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
                     />
                     <FieldLabel>Headline di gambar</FieldLabel>
                     <Textarea
                       value={headline}
                       onChange={(e) => setHeadline(e.target.value)}
                       disabled={fieldsLocked}
-                      className="min-h-[80px] border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                      className="min-h-[80px] border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
                     />
                     {slide.role === "cover" ? (
                       <div className="space-y-2">
@@ -836,7 +795,7 @@ export function EditorPanel({
                       value={body}
                       onChange={(e) => setBody(e.target.value)}
                       disabled={fieldsLocked}
-                      className="min-h-[80px] border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+                      className="min-h-[80px] border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
                     />
                   </>
                 ) : (
@@ -862,7 +821,7 @@ export function EditorPanel({
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
               disabled={fieldsLocked}
-              className="min-h-[80px] border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+              className="min-h-[80px] border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
             />
           </StudioCard>
 
@@ -871,36 +830,66 @@ export function EditorPanel({
               value={hashtagsText}
               onChange={(e) => setHashtagsText(e.target.value)}
               disabled={fieldsLocked}
-              className="border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]"
+              className="border-[var(--rule)] bg-[var(--bg)] text-[var(--ink)]"
             />
           </StudioCard>
 
+          <StudioCard title="Unduh">
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={downloadAll}>
+                Download semua ({slideTotal})
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => downloadOne(clampedIndex)}>
+                Slide {clampedIndex + 1}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={copyCaption}>
+                {copyLabel}
+              </Button>
+              {canWrite && !frozen ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => run(() => renderAgainAction(draft.id))}
+                >
+                  Render ulang
+                </Button>
+              ) : null}
+            </div>
+          </StudioCard>
+
           {canWrite && !frozen ? (
-            <div className="fixed bottom-0 right-0 left-0 z-20 border-t border-[var(--line)] bg-[var(--bg)] px-4 py-3 md:left-[240px]">
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => run(() => saveAndRenderAction(draft.id, savePayload))}
-                >
-                  Simpan & render ulang
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={pending}
-                  onClick={() => run(() => saveDraftTextAction(draft.id, savePayload))}
-                >
-                  Simpan teks saja
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={pending}
-                  onClick={() => run(() => rewriteCopyAction(draft.topicId))}
-                >
-                  Tulis ulang
-                </Button>
+            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 md:left-[240px]">
+              <div className="grid gap-8 px-6 md:px-8 lg:grid-cols-2">
+                <div className="hidden lg:block" aria-hidden />
+                <div data-save-bar className="pointer-events-auto border-t border-[var(--rule)] bg-[var(--bg)] py-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => run(() => saveAndRenderAction(draft.id, savePayload))}
+                    >
+                      Simpan & render ulang
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={() => run(() => saveDraftTextAction(draft.id, savePayload))}
+                    >
+                      Simpan teks saja
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={() => run(() => rewriteCopyAction(draft.topicId))}
+                    >
+                      Tulis ulang
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}

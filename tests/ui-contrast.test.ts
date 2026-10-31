@@ -59,13 +59,14 @@ describe("studio control colors", () => {
       return match[1].toLowerCase();
     };
     const muted = token("muted");
-    const line = token("line");
+    const rule = token("rule");
     const bg = token("bg");
     const panel = token("panel-2");
+    expect(token("line"), "quiet grid and chrome").toBe("#1e222a");
     expect(contrastRatio(muted, panel), "label on card").toBeGreaterThanOrEqual(AA);
     expect(contrastRatio(muted, bg), "label on grid").toBeGreaterThanOrEqual(AA);
-    expect(contrastRatio(line, bg), "border on grid").toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(line, panel), "border on card").toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(rule, bg), "card border on grid").toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(rule, panel), "card border on card").toBeGreaterThanOrEqual(3);
   });
 
   it("keeps outline text explicit and disabled buttons a solid dark pill", () => {
@@ -378,6 +379,24 @@ describe("rendered studio pages", () => {
       }
       expect(await page.locator("[data-format-detail]").count()).toBe(2);
       expect(await page.locator("[data-slide-copy]").count()).toBeGreaterThan(0);
+      const previewColumn = page.locator("[data-preview-column]");
+      expect(await previewColumn.getByRole("button", { name: "Hasil render" }).count()).toBe(1);
+      expect(await previewColumn.getByRole("button", { name: /Download semua/ }).count()).toBe(0);
+      const unduh = page.locator("[data-studio-card]", {
+        has: page.getByRole("heading", { name: "Unduh", exact: true }),
+      });
+      expect(await unduh.getByRole("button", { name: /Download semua/ }).count()).toBe(1);
+      const bars = await page.locator("[data-save-bar]").count();
+      expect(bars).toBe(1);
+      const separated = await page.evaluate(() => {
+        const preview = document.querySelector("[data-cover-preview]");
+        const bar = document.querySelector("[data-save-bar]");
+        if (!preview || !bar) return false;
+        const frame = preview.getBoundingClientRect();
+        const save = bar.getBoundingClientRect();
+        return save.left >= frame.right - 4;
+      });
+      expect(separated, "save bar stays on the right of the preview").toBe(true);
 
       const shots: Array<{ path: string; file: string; wait: string }> = [
         { path: `/review/${DEMO_REVIEW_DRAFT_ID}`, file: "after-review.png", wait: "Posting sekarang" },

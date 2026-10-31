@@ -103,9 +103,11 @@
   --bg: #07080a;
   --panel: #0e1014;
   --panel-2: #14171c;
-  --line: #6b7380;
+  /* Quiet grid, sidebar, and top bar. Review cards use --rule so their edges stay AA. */
+  --line: #1e222a;
+  --rule: #6b7380;
   --ink: #e8eaed;
-  --muted: #b7bec8;
+  --muted: #c5ccd4;
   --accent: #d7ff3a;
   --scout: #38bdf8;
   --analis: #a78bfa;
